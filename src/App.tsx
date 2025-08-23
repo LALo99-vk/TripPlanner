@@ -1,0 +1,68 @@
+import React, { useState } from 'react';
+import Header from './components/Layout/Header';
+import Sidebar from './components/Layout/Sidebar';
+import HomePage from './components/Pages/HomePage';
+import TripPlannerPage from './components/Pages/TripPlannerPage';
+import BookingPage from './components/Pages/BookingPage';
+import ChatPage from './components/Pages/ChatPage';
+import BudgetPage from './components/Pages/BudgetPage';
+import GroupPage from './components/Pages/GroupPage';
+import WalkieTalkiePage from './components/Pages/WalkieTalkiePage';
+import EmergencyPage from './components/Pages/EmergencyPage';
+import DiscoverPage from './components/Pages/DiscoverPage';
+import ProfilePage from './components/Pages/ProfilePage';
+
+type PageType = 'home' | 'plan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile';
+
+function App() {
+  const [currentPage, setCurrentPage] = useState<PageType>('home');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'home':
+        return <HomePage onPageChange={setCurrentPage} />;
+      case 'plan':
+        return <TripPlannerPage />;
+      case 'booking':
+        return <BookingPage />;
+      case 'chat':
+        return <ChatPage />;
+      case 'budget':
+        return <BudgetPage />;
+      case 'group':
+        return <GroupPage />;
+      case 'walkie':
+        return <WalkieTalkiePage />;
+      case 'emergency':
+        return <EmergencyPage />;
+      case 'discover':
+        return <DiscoverPage />;
+      case 'profile':
+        return <ProfilePage />;
+      default:
+        return <HomePage onPageChange={setCurrentPage} />;
+    }
+  };
+
+  return (
+    <div className="min-h-screen app-container flex">
+      <Sidebar
+        currentPage={currentPage}
+        onPageChange={setCurrentPage}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+      
+      <div className="flex-1 flex flex-col lg:ml-64 min-h-screen">
+        <Header onMenuToggle={() => setSidebarOpen(!sidebarOpen)} />
+        
+        <main className="flex-1">
+          {renderPage()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default App;

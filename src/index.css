@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+* {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+body {
+  background: linear-gradient(180deg, #0a0a0a 0%, #1a0a0a 30%, #E60231 100%);
+  min-height: 100vh;
+  color: #ffffff;
+}
+
+.app-container {
+  background: linear-gradient(180deg, #0a0a0a 0%, #1a0a0a 30%, #E60231 100%);
+  min-height: 100vh;
+}
+
+.premium-card {
+  background: linear-gradient(145deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+  border: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(10px);
+}
+
+.premium-button-primary {
+  background: #ffffff;
+  color: #0a0a0a;
+  font-weight: 600;
+  border-radius: 12px;
+  padding: 12px 24px;
+  transition: all 0.3s ease;
+}
+
+.premium-button-primary:hover {
+  background: #f0f0f0;
+  transform: translateY(-1px);
+}
+
+.premium-button-secondary {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,0.3);
+  font-weight: 500;
+  border-radius: 12px;
+  padding: 12px 24px;
+  transition: all 0.3s ease;
+}
+
+.premium-button-secondary:hover {
+  border-color: rgba(255,255,255,0.5);
+  background: rgba(255,255,255,0.05);
+}
+
+.accent-glow {
+  background: linear-gradient(90deg, #ff6b6b, #ee5a24);
+  color: white;
+  font-weight: 600;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 14px;
+}
+
+.hero-title {
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  font-weight: 800;
+  line-height: 1.1;
+  background: linear-gradient(135deg, #ffffff 0%, #e0e0e0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  font-weight: 400;
+  color: rgba(255,255,255,0.8);
+  line-height: 1.6;
+}
+
+.main-container {
+  background: linear-gradient(180deg, #0a0a0a 0%, #1a0a0a 30%, #E60231 100%);
+  min-height: 100vh;
+  width: 100%;
+}
+
+/* Glassmorphism Components */
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+}
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #FFFFFF;
+}
+
+.glass-input::placeholder {
+  color: #888888;
+}
+
+.glass-input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+}
+
+/* Typography System */
+.text-primary {
+  color: #FFFFFF;
+}
+
+.text-secondary {
+  color: #B0B0B0;
+}
+
+.text-muted {
+  color: #888888;
+}
+
+/* Responsive Content */
+.content-container {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+@media (min-width: 1024px) {
+  .content-container {
+    padding: 0 2rem;
+  }
+}

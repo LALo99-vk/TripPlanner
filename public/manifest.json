@@ -1,0 +1,16 @@
+{
+  "name": "WanderWise - AI Travel Planner",
+  "short_name": "WanderWise",
+  "description": "AI-powered travel planning for India",
+  "theme_color": "#FF9933",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
