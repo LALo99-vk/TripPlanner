@@ -12,8 +12,61 @@ export interface ChatResponse {
   timestamp: string;
 }
 
+// Structured AI Trip Plan types
+export interface AiPlanOverview {
+  from: string;
+  to: string;
+  durationDays: number;
+  budgetINR: number;
+  travelers: number;
+  interests: string[];
+  summary: string;
+}
+
+export interface AiPlanSlotItem {
+  name: string;
+  description: string;
+  location: string;
+  duration: string;
+  costINR: number;
+  travelDistanceKm: number;
+}
+
+export interface AiPlanDay {
+  day: number;
+  header: string;
+  slots: {
+    morning: AiPlanSlotItem[];
+    afternoon: AiPlanSlotItem[];
+    evening: AiPlanSlotItem[];
+  };
+  aiTip: string;
+  totalDayCostINR: number;
+}
+
+export interface AiPlanTotalsBreakdown {
+  stay: number;
+  food: number;
+  transport: number;
+  activities: number;
+  misc: number;
+}
+
+export interface AiPlanTotals {
+  totalCostINR: number;
+  breakdown: AiPlanTotalsBreakdown;
+}
+
+export interface AiTripPlanData {
+  overview: AiPlanOverview;
+  days: AiPlanDay[];
+  totals: AiPlanTotals;
+  budgetWarning?: string | null;
+}
+
 export interface TripPlanResponse {
-  itinerary: string;
+  success: boolean;
+  data: AiTripPlanData;
   timestamp: string;
 }
 
@@ -74,6 +127,27 @@ class ApiService {
     return this.makeRequest<TripPlanResponse>('/ai/plan-trip', {
       method: 'POST',
       body: JSON.stringify(tripData),
+    });
+  }
+
+  async optimizeBudget(params: {
+    plan: AiTripPlanData;
+    targetAdjustmentINR: number;
+    preference: 'reduce_cost' | 'upgrade';
+  }): Promise<{ success: boolean; data: { updatedPlan: AiTripPlanData; changes: any[]; newTotals: AiPlanTotals }; timestamp: string }> {
+    return this.makeRequest('/ai/optimize-budget', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async smartAdjust(params: {
+    plan: AiTripPlanData;
+    action: { type: 'reduce_cost' | 'add_activities'; amountINR?: number; theme?: string };
+  }): Promise<{ success: boolean; data: { updatedPlan: AiTripPlanData; note: string }; timestamp: string }> {
+    return this.makeRequest('/ai/smart-adjust', {
+      method: 'POST',
+      body: JSON.stringify(params),
     });
   }
 

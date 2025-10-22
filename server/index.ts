@@ -68,42 +68,88 @@ Context: ${context || 'General travel assistance'}`;
   }
 });
 
-// AI Trip Planning endpoint
+// AI Trip Planning endpoint (returns structured JSON)
 app.post('/api/ai/plan-trip', async (req, res) => {
   try {
     const { from, to, startDate, endDate, budget, travelers, interests } = req.body;
 
-    const prompt = `Create a detailed travel itinerary for a trip from ${from} to ${to} from ${startDate} to ${endDate}.
+    const prompt = `You are WanderWise, generate a fully structured trip plan strictly as valid JSON only, with no markdown.
 
-Trip Details:
-- Budget: ₹${budget} for ${travelers} travelers
-- Interests: ${interests.join(', ')}
+Input:
+from: ${from}
+to: ${to}
+startDate: ${startDate}
+endDate: ${endDate}
+budgetINR: ${budget}
+travelers: ${travelers}
+interests: ${Array.isArray(interests) ? interests.join(', ') : interests}
 
-Please provide:
-1. Day-wise detailed itinerary with specific activities
-2. Estimated costs for each activity in Indian Rupees
-3. Accommodation suggestions
-4. Local transportation recommendations
-5. Food and dining suggestions
-6. Cultural insights and tips
+Rules:
+- Output MUST be strictly JSON parseable. Do not include code fences or commentary.
+- Use Indian Rupees (INR) with numeric costs (no symbols), client will format.
+- Provide hidden gems and famous places aligned to interests.
+- Ensure total estimated cost is within budget; if over, note a budgetWarning string.
 
-Format the response as a structured JSON with days, activities, costs, and descriptions.`;
+JSON schema (example keys; follow names exactly):
+{
+  "overview": {
+    "from": string,
+    "to": string,
+    "durationDays": number,
+    "budgetINR": number,
+    "travelers": number,
+    "interests": string[],
+    "summary": string
+  },
+  "days": [
+    {
+      "day": number,
+      "header": string,
+      "slots": {
+        "morning": [
+          {"name": string, "description": string, "location": string, "duration": string, "costINR": number, "travelDistanceKm": number}
+        ],
+        "afternoon": [...],
+        "evening": [...]
+      },
+      "aiTip": string,
+      "totalDayCostINR": number
+    }
+  ],
+  "totals": {
+    "totalCostINR": number,
+    "breakdown": {"stay": number, "food": number, "transport": number, "activities": number, "misc": number}
+  },
+  "budgetWarning": string | null
+}`;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
-        { role: "system", content: "You are an expert Indian travel planner. Provide detailed, practical itineraries with accurate cost estimates in Indian Rupees." },
+        { role: "system", content: "You are an expert Indian travel planner. Always return STRICT JSON per user schema, with realistic INR costs and distances." },
         { role: "user", content: prompt }
       ],
       max_tokens: 1500,
       temperature: 0.7,
     });
 
-    const aiResponse = completion.choices[0]?.message?.content || "Unable to generate itinerary";
+    const aiResponse = completion.choices[0]?.message?.content || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(aiResponse);
+    } catch (e) {
+      // Try to salvage by trimming code fences if any
+      const trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      try { parsed = JSON.parse(trimmed); } catch (e2) { parsed = null; }
+    }
+
+    if (!parsed) {
+      return res.status(502).json({ success: false, error: 'Invalid AI response', message: 'AI did not return valid JSON' });
+    }
 
     res.json({
       success: true,
-      itinerary: aiResponse,
+      data: parsed,
       timestamp: new Date().toISOString()
     });
 
@@ -161,6 +207,74 @@ Keep the response practical and specific to Indian travel costs.`;
       error: 'Failed to analyze budget',
       message: 'Please try again later'
     });
+  }
+});
+
+// AI Budget Optimization endpoint
+app.post('/api/ai/optimize-budget', async (req, res) => {
+  try {
+    const { plan, targetAdjustmentINR, preference } = req.body; // preference: 'reduce_cost' | 'upgrade'
+
+    const prompt = `You will optimize the following trip plan JSON by ${preference === 'reduce_cost' ? 'reducing' : 'upgrading'} total cost by approximately ${targetAdjustmentINR} INR while keeping overall structure. Return STRICT JSON with fields: { updatedPlan, changes: [{type, before, after, rationale}], newTotals }.
+
+Plan JSON:
+${JSON.stringify(plan)}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are a budget optimization assistant. Always return strict JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 1200,
+      temperature: 0.4,
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content || '{}';
+    let parsed;
+    try { parsed = JSON.parse(aiResponse); } catch {
+      const trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+    }
+    if (!parsed) return res.status(502).json({ success: false, error: 'Invalid AI response' });
+    res.json({ success: true, data: parsed, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('Budget Optimization Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to optimize budget', message: 'Please try again later' });
+  }
+});
+
+// AI Smart Adjust endpoint
+app.post('/api/ai/smart-adjust', async (req, res) => {
+  try {
+    const { plan, action } = req.body; // action: { type: 'reduce_cost' | 'add_activities', amountINR?: number, theme?: string }
+
+    const prompt = `Apply this smart adjustment to the trip plan and return STRICT JSON { updatedPlan, note }.
+Action: ${JSON.stringify(action)}
+Plan JSON:
+${JSON.stringify(plan)}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are a trip customization assistant. Always return strict JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 1000,
+      temperature: 0.6,
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content || '{}';
+    let parsed;
+    try { parsed = JSON.parse(aiResponse); } catch {
+      const trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+    }
+    if (!parsed) return res.status(502).json({ success: false, error: 'Invalid AI response' });
+    res.json({ success: true, data: parsed, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('Smart Adjust Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to apply smart adjustment', message: 'Please try again later' });
   }
 });
 

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Calendar, MapPin, DollarSign, Users, Sparkles, Clock, Star, X, Plus, Download, Share, ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { MapPin, Clock, X, Plus, Download, Share, ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { INDIAN_CITIES, TRAVEL_INTERESTS } from '../../utils/constants';
 import { TravelInterest } from '../../types';
-import { apiService } from '../../services/api';
+import { apiService, AiTripPlanData } from '../../services/api';
+import { planStore } from '../../services/planStore';
 
 interface TripStyle {
   id: string;
@@ -11,6 +12,7 @@ interface TripStyle {
   description: string;
 }
 
+// Local view models for legacy render, derived from AI plan
 interface ActivityCard {
   time: string;
   title: string;
@@ -19,16 +21,17 @@ interface ActivityCard {
   duration: string;
   cost: number;
 }
-
 interface DayItinerary {
   day: number;
   title: string;
   activities: ActivityCard[];
 }
-
 interface GeneratedItinerary {
   tripTitle: string;
   itinerary: DayItinerary[];
+  totals?: { total: number; breakdown: { stay: number; food: number; transport: number; activities: number; misc: number } };
+  overview?: { from: string; to: string; durationDays: number; budgetINR: number; travelers: number; interests: string[]; summary: string };
+  aiRaw?: AiTripPlanData;
 }
 
 const TripPlannerPage: React.FC = () => {
@@ -50,6 +53,8 @@ const TripPlannerPage: React.FC = () => {
   const [generatedItinerary, setGeneratedItinerary] = useState<GeneratedItinerary | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set([1]));
+  const [smartAdjustLoading, setSmartAdjustLoading] = useState(false);
+  const formRef = useRef<HTMLDivElement | null>(null);
 
   const tripStyles: TripStyle[] = [
     { id: 'relaxing', label: 'Relaxing', icon: '🏖️', description: 'Beaches, Spas' },
@@ -133,74 +138,36 @@ const TripPlannerPage: React.FC = () => {
         interests: formData.interests
       });
 
-      // Create a structured itinerary from AI response
-      const mockItinerary: GeneratedItinerary = {
-        tripTitle: `${Math.ceil((new Date(formData.endDate).getTime() - new Date(formData.startDate).getTime()) / (1000 * 60 * 60 * 24))}-Day ${formData.to} Adventure`,
-        itinerary: [
-          {
-            day: 1,
-            title: `Arrival in ${formData.to}`,
-            activities: [
-              {
-                time: '12:00 PM',
-                title: 'Airport Transfer & Check-in',
-                category: 'transport',
-                description: 'Comfortable transfer from airport to your accommodation with city overview',
-                duration: '2 hours',
-                cost: Math.floor(formData.budget * 0.08)
-              },
-              {
-                time: '3:00 PM',
-                title: 'Local Area Exploration',
-                category: 'sightseeing',
-                description: 'Walk around the neighborhood, get familiar with local shops and restaurants',
-                duration: '2 hours',
-                cost: Math.floor(formData.budget * 0.05)
-              },
-              {
-                time: '6:00 PM',
-                title: 'Welcome Dinner',
-                category: 'food',
-                description: 'Traditional local cuisine at a highly-rated restaurant',
-                duration: '2 hours',
-                cost: Math.floor(formData.budget * 0.12)
-              }
-            ]
-          },
-          {
-            day: 2,
-            title: `Exploring ${formData.to}`,
-            activities: [
-              {
-                time: '9:00 AM',
-                title: 'Main Attraction Visit',
-                category: 'sightseeing',
-                description: `Visit the most famous landmarks and attractions in ${formData.to}`,
-                duration: '4 hours',
-                cost: Math.floor(formData.budget * 0.15)
-              },
-              {
-                time: '2:00 PM',
-                title: 'Local Cuisine Experience',
-                category: 'food',
-                description: 'Food tour featuring local specialties and street food',
-                duration: '3 hours',
-                cost: Math.floor(formData.budget * 0.10)
-              },
-              {
-                time: '7:00 PM',
-                title: 'Cultural Performance',
-                category: 'culture',
-                description: 'Traditional music and dance performance',
-                duration: '2 hours',
-                cost: Math.floor(formData.budget * 0.08)
-              }
-            ]
-          }
-        ]
+      const ai = response.data;
+      // Transform AI plan to local render model
+      const itineraryFromAi: GeneratedItinerary = {
+        tripTitle: `${ai.overview.durationDays}-Day ${ai.overview.to} Adventure` ,
+        overview: ai.overview,
+        totals: { total: ai.totals.totalCostINR, breakdown: ai.totals.breakdown },
+        itinerary: ai.days.map((d) => {
+          const activities: ActivityCard[] = [];
+          const pushSlot = (items: any[], label: string) => {
+            (items || []).forEach((it) => {
+              activities.push({
+                time: label,
+                title: it.name,
+                category: 'activity',
+                description: `${it.description} • ${it.location} • ~${it.travelDistanceKm} km travel`,
+                duration: it.duration,
+                cost: it.costINR,
+              });
+            });
+          };
+          pushSlot(d.slots.morning, 'Morning');
+          pushSlot(d.slots.afternoon, 'Afternoon');
+          pushSlot(d.slots.evening, 'Evening');
+          return { day: d.day, title: d.header, activities };
+        }),
+        aiRaw: ai,
       };
 
-      setGeneratedItinerary(mockItinerary);
+      setGeneratedItinerary(itineraryFromAi);
+      planStore.setPlan(ai);
       setExpandedDays(new Set([1])); // Expand first day by default
     } catch (error) {
       console.error('Failed to generate itinerary:', error);
@@ -208,6 +175,143 @@ const TripPlannerPage: React.FC = () => {
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  // total cost is shown directly from generatedItinerary.totals
+
+  const handleSmartAdjust = async (type: 'reduce_cost' | 'add_activities') => {
+    if (!generatedItinerary?.aiRaw) return;
+    setSmartAdjustLoading(true);
+    try {
+      if (type === 'reduce_cost') {
+        const res = await apiService.optimizeBudget({
+          plan: generatedItinerary.aiRaw,
+          targetAdjustmentINR: 2000,
+          preference: 'reduce_cost',
+        });
+        const ai = res.data.updatedPlan;
+        const updated: GeneratedItinerary = {
+          tripTitle: `${ai.overview.durationDays}-Day ${ai.overview.to} Adventure` ,
+          overview: ai.overview,
+          totals: { total: ai.totals.totalCostINR, breakdown: ai.totals.breakdown },
+          itinerary: ai.days.map((d) => {
+            const activities: ActivityCard[] = [];
+            const pushSlot = (items: any[], label: string) => {
+              (items || []).forEach((it) => {
+                activities.push({
+                  time: label,
+                  title: it.name,
+                  category: 'activity',
+                  description: `${it.description} • ${it.location} • ~${it.travelDistanceKm} km travel`,
+                  duration: it.duration,
+                  cost: it.costINR,
+                });
+              });
+            };
+            pushSlot(d.slots.morning, 'Morning');
+            pushSlot(d.slots.afternoon, 'Afternoon');
+            pushSlot(d.slots.evening, 'Evening');
+            return { day: d.day, title: d.header, activities };
+          }),
+          aiRaw: ai,
+        };
+        setGeneratedItinerary(updated);
+      } else {
+        const res = await apiService.smartAdjust({
+          plan: generatedItinerary.aiRaw,
+          action: { type: 'add_activities', theme: formData.tripStyle || 'adventure' },
+        });
+        const ai = res.data.updatedPlan;
+        const updated: GeneratedItinerary = {
+          tripTitle: `${ai.overview.durationDays}-Day ${ai.overview.to} Adventure` ,
+          overview: ai.overview,
+          totals: { total: ai.totals.totalCostINR, breakdown: ai.totals.breakdown },
+          itinerary: ai.days.map((d) => {
+            const activities: ActivityCard[] = [];
+            const pushSlot = (items: any[], label: string) => {
+              (items || []).forEach((it) => {
+                activities.push({
+                  time: label,
+                  title: it.name,
+                  category: 'activity',
+                  description: `${it.description} • ${it.location} • ~${it.travelDistanceKm} km travel`,
+                  duration: it.duration,
+                  cost: it.costINR,
+                });
+              });
+            };
+            pushSlot(d.slots.morning, 'Morning');
+            pushSlot(d.slots.afternoon, 'Afternoon');
+            pushSlot(d.slots.evening, 'Evening');
+            return { day: d.day, title: d.header, activities };
+          }),
+          aiRaw: ai,
+        };
+        setGeneratedItinerary(updated);
+      }
+    } catch (e) {
+      alert('Smart adjust failed.');
+    } finally {
+      setSmartAdjustLoading(false);
+    }
+  };
+
+  const scrollToForm = () => {
+    if (formRef.current) {
+      formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const mapLink = (location: string) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
+
+  const DonutChart: React.FC<{ breakdown: { stay: number; food: number; transport: number; activities: number; misc: number } }> = ({ breakdown }) => {
+    const total = Object.values(breakdown).reduce((a, b) => a + b, 0) || 1;
+    const segments = [
+      { key: 'stay', color: '#60a5fa', value: breakdown.stay },
+      { key: 'food', color: '#f59e0b', value: breakdown.food },
+      { key: 'transport', color: '#34d399', value: breakdown.transport },
+      { key: 'activities', color: '#a78bfa', value: breakdown.activities },
+      { key: 'misc', color: '#f472b6', value: breakdown.misc },
+    ];
+    let cumulative = 0;
+    const radius = 40;
+    const circumference = 2 * Math.PI * radius;
+    return (
+      <div className="flex items-center gap-6">
+        <svg width="120" height="120" viewBox="0 0 120 120">
+          <g transform="translate(60,60)">
+            <circle r={30} fill="#0f172a" />
+            {segments.map((s) => {
+              const fraction = s.value / total;
+              const dash = fraction * circumference;
+              const gap = circumference - dash;
+              const rotation = (cumulative / total) * 360 - 90; // start at top
+              cumulative += s.value;
+              return (
+                <circle
+                  key={s.key}
+                  r={radius}
+                  fill="transparent"
+                  stroke={s.color}
+                  strokeWidth={16}
+                  strokeDasharray={`${dash} ${gap}`}
+                  transform={`rotate(${rotation})`}
+                  strokeLinecap="butt"
+                />
+              );
+            })}
+          </g>
+        </svg>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {segments.map(s => (
+            <div key={s.key} className="flex items-center gap-2">
+              <span style={{ background: s.color }} className="inline-block w-3 h-3 rounded"></span>
+              <span className="capitalize">{s.key}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const getCategoryIcon = (category: string) => {
@@ -237,7 +341,7 @@ const TripPlannerPage: React.FC = () => {
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
           {/* Enhanced Planning Form */}
-          <div className="glass-card p-8">
+          <div ref={formRef} className="glass-card p-8">
             <h2 className="text-2xl font-bold text-primary mb-8">
               Plan Your Journey
             </h2>
@@ -468,7 +572,8 @@ const TripPlannerPage: React.FC = () => {
               </div>
 
               {/* Generate Button */}
-              <button
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
                 onClick={generateItinerary}
                 disabled={isGenerating}
                 className="w-full premium-button-primary py-4 text-lg font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
@@ -482,6 +587,14 @@ const TripPlannerPage: React.FC = () => {
                   'Generate My Itinerary'
                 )}
               </button>
+                <button
+                  onClick={generateItinerary}
+                  disabled={isGenerating}
+                  className="w-full premium-button-secondary py-4 text-lg font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Regenerate Plan
+                </button>
+              </div>
             </div>
           </div>
 
@@ -513,6 +626,37 @@ const TripPlannerPage: React.FC = () => {
 
             {generatedItinerary && (
               <div className="space-y-6">
+                {/* Trip Overview Card */}
+                <div className="glass-card p-6">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="text-sm text-secondary mb-2">Trip Overview</div>
+                      <div className="space-y-1">
+                        <div>📍 Trip: {generatedItinerary.overview?.from} → {generatedItinerary.overview?.to}</div>
+                        <div>📅 Duration: {generatedItinerary.overview?.durationDays} Days</div>
+                        <div>💰 Budget: ₹{generatedItinerary.overview?.budgetINR.toLocaleString('en-IN')}</div>
+                        <div>👥 Travellers: {generatedItinerary.overview?.travelers}</div>
+                        <div>🎯 Interest: {(generatedItinerary.overview?.interests || []).join(', ')}</div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <button onClick={scrollToForm} className="premium-button-secondary px-4 py-2 rounded-xl">
+                        Edit Preferences
+                      </button>
+                      <button onClick={() => handleSmartAdjust('reduce_cost')} disabled={smartAdjustLoading} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center">
+                        <SlidersHorizontal className="h-4 w-4 mr-2" />
+                        {smartAdjustLoading ? 'Adjusting...' : 'Smart Adjust (–₹2000)'}
+                      </button>
+                      <button onClick={() => handleSmartAdjust('add_activities')} disabled={smartAdjustLoading} className="premium-button-secondary px-4 py-2 rounded-xl">
+                        Add more {formData.tripStyle || 'adventure'} activities
+                      </button>
+                    </div>
+                  </div>
+                  {generatedItinerary.overview?.summary && (
+                    <p className="text-secondary mt-3">{generatedItinerary.overview.summary}</p>
+                  )}
+                </div>
+
                 {/* Itinerary Header */}
                 <div className="text-center mb-8">
                   <h3 className="text-2xl font-bold text-primary mb-4">
@@ -523,74 +667,111 @@ const TripPlannerPage: React.FC = () => {
                       <Download className="h-4 w-4 mr-2" />
                       Save Trip
                     </button>
-                    <button className="premium-button-secondary px-6 py-2 rounded-xl flex items-center">
+                    <button onClick={() => {
+                      planStore.setPlan(generatedItinerary.aiRaw!);
+                      // navigate to Your Plan via global app state
+                      const evt = new CustomEvent('navigate', { detail: { page: 'yourplan' } });
+                      window.dispatchEvent(evt as any);
+                    }} className="premium-button-secondary px-6 py-2 rounded-xl flex items-center">
                       <Share className="h-4 w-4 mr-2" />
-                      Export PDF
+                      Open in Your Plan
                     </button>
                   </div>
                 </div>
 
-                {/* Day-by-Day Accordion */}
+                 {/* Day-by-Day Accordion */}
                 <div className="space-y-4">
-                  {generatedItinerary.itinerary.map((day) => (
-                    <div key={day.day} className="glass-card overflow-hidden">
+                  {(generatedItinerary.aiRaw?.days || []).map((d) => (
+                    <div key={d.day} className="glass-card overflow-hidden">
                       <button
-                        onClick={() => toggleDayExpansion(day.day)}
+                        onClick={() => toggleDayExpansion(d.day)}
                         className="w-full p-6 text-left flex items-center justify-between hover:bg-white/5 transition-colors"
                       >
                         <div>
                           <h4 className="text-xl font-bold text-primary">
-                            Day {day.day}: {day.title}
+                            Day {d.day}: {d.header}
                           </h4>
                           <p className="text-secondary mt-1">
-                            {day.activities.length} activities planned
+                            {(d.slots.morning?.length || 0) + (d.slots.afternoon?.length || 0) + (d.slots.evening?.length || 0)} activities planned
                           </p>
                         </div>
-                        {expandedDays.has(day.day) ? (
+                        {expandedDays.has(d.day) ? (
                           <ChevronDown className="h-6 w-6 text-secondary" />
                         ) : (
                           <ChevronRight className="h-6 w-6 text-secondary" />
                         )}
                       </button>
 
-                      {expandedDays.has(day.day) && (
+                      {expandedDays.has(d.day) && (
                         <div className="px-6 pb-6">
-                          <div className="space-y-4">
-                            {day.activities.map((activity, index) => (
-                              <div key={index} className="flex items-start space-x-4 p-4 glass-card">
-                                <div className="flex-shrink-0 w-12 h-12 glass-card rounded-full flex items-center justify-center text-xl">
-                                  {getCategoryIcon(activity.category)}
-                                </div>
-                                
-                                <div className="flex-grow">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <h5 className="font-bold text-primary">{activity.title}</h5>
-                                    <span className="text-sm font-semibold text-primary">
-                                      ₹{activity.cost.toLocaleString('en-IN')}
-                                    </span>
-                                  </div>
-                                  
-                                  <div className="flex items-center text-sm text-secondary mb-2">
-                                    <Clock className="h-4 w-4 mr-1" />
-                                    {activity.time} • {activity.duration}
-                                  </div>
-                                  
-                                  <p className="text-sm text-secondary mb-3">
-                                    {activity.description}
-                                  </p>
-                                  
-                                  <button className="premium-button-secondary px-4 py-2 text-sm rounded-lg">
-                                    View on Map
-                                  </button>
+                          <div className="space-y-6">
+                            {([
+                              { label: '🌅 Morning', items: d.slots.morning },
+                              { label: '🌞 Afternoon', items: d.slots.afternoon },
+                              { label: '🌙 Evening', items: d.slots.evening },
+                            ] as { label: string; items: any[] | undefined }[]).map((slot, idx) => (
+                              <div key={idx}>
+                                <div className="font-semibold text-primary mb-3">{slot.label}</div>
+                                <div className="space-y-4">
+                                  {(slot.items || []).map((it, index) => (
+                                    <div key={index} className="flex items-start space-x-4 p-4 glass-card">
+                                      <div className="flex-shrink-0 w-12 h-12 glass-card rounded-full flex items-center justify-center text-xl">
+                                        {getCategoryIcon('activity')}
+                                      </div>
+                                      <div className="flex-grow">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <h5 className="font-bold text-primary">{it.name}</h5>
+                                          <span className="text-sm font-semibold text-primary">₹{Number(it.costINR || 0).toLocaleString('en-IN')}</span>
+                                        </div>
+                                        <div className="flex items-center text-sm text-secondary mb-2">
+                                          <Clock className="h-4 w-4 mr-1" />
+                                          {it.duration} • {it.location} • ~{it.travelDistanceKm} km
+                                        </div>
+                                        <p className="text-sm text-secondary mb-3">{it.description}</p>
+                                        {it.location && (
+                                          <a href={mapLink(it.location)} target="_blank" rel="noreferrer" className="premium-button-secondary px-4 py-2 text-sm rounded-lg inline-block">
+                                            View on Map
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {(!slot.items || slot.items.length === 0) && (
+                                    <div className="text-sm text-secondary">No plans for this time.</div>
+                                  )}
                                 </div>
                               </div>
                             ))}
+                            <div className="flex items-center justify-between mt-4">
+                              <div className="text-sm text-secondary">AI Tip:</div>
+                              <div className="text-sm text-secondary">Total Day Cost: ₹{Number(d.totalDayCostINR || 0).toLocaleString('en-IN')}</div>
+                            </div>
+                            {d.aiTip && (
+                              <div className="glass-card p-3 text-sm text-secondary">{d.aiTip}</div>
+                            )}
                           </div>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
+
+                {/* Summary with Pie-like breakdown (textual placeholder; charts optional) */}
+                {generatedItinerary.totals && (
+                  <div className="glass-card p-6">
+                    <div className="text-lg font-semibold mb-4">Total Trip Cost: ₹{generatedItinerary.totals.total.toLocaleString('en-IN')}</div>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+                      <DonutChart breakdown={generatedItinerary.totals.breakdown} />
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+                        <div>Stay: ₹{generatedItinerary.totals.breakdown.stay.toLocaleString('en-IN')}</div>
+                        <div>Food: ₹{generatedItinerary.totals.breakdown.food.toLocaleString('en-IN')}</div>
+                        <div>Transport: ₹{generatedItinerary.totals.breakdown.transport.toLocaleString('en-IN')}</div>
+                        <div>Activities: ₹{generatedItinerary.totals.breakdown.activities.toLocaleString('en-IN')}</div>
+                        <div>Misc: ₹{generatedItinerary.totals.breakdown.misc.toLocaleString('en-IN')}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

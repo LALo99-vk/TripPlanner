@@ -3,6 +3,7 @@ import Header from './components/Layout/Header';
 import Sidebar from './components/Layout/Sidebar';
 import HomePage from './components/Pages/HomePage';
 import TripPlannerPage from './components/Pages/TripPlannerPage';
+import YourPlanPage from './components/Pages/YourPlanPage';
 import BookingPage from './components/Pages/BookingPage';
 import ChatPage from './components/Pages/ChatPage';
 import BudgetPage from './components/Pages/BudgetPage';
@@ -12,11 +13,19 @@ import EmergencyPage from './components/Pages/EmergencyPage';
 import DiscoverPage from './components/Pages/DiscoverPage';
 import ProfilePage from './components/Pages/ProfilePage';
 
-type PageType = 'home' | 'plan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile';
+type PageType = 'home' | 'plan' | 'yourplan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('home');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  React.useEffect(() => {
+    const handler = (e: any) => {
+      if (e?.detail?.page) setCurrentPage(e.detail.page);
+    };
+    window.addEventListener('navigate', handler as any);
+    return () => window.removeEventListener('navigate', handler as any);
+  }, []);
 
   const renderPage = () => {
     switch (currentPage) {
@@ -24,6 +33,8 @@ function App() {
         return <HomePage onPageChange={setCurrentPage} />;
       case 'plan':
         return <TripPlannerPage />;
+      case 'yourplan':
+        return <YourPlanPage />;
       case 'booking':
         return <BookingPage />;
       case 'chat':

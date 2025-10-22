@@ -5,13 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:full": "concurrently \"npm run server\" \"npm run dev\"",
+    "turnon": "concurrently \"npm run server\" \"npm run dev\"",
     "server": "cd server && npm run dev",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@splinetool/react-spline": "^4.1.0",
+    "@splinetool/runtime": "^1.10.80",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "concurrently": "^9.2.0",
