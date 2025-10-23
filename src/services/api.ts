@@ -30,6 +30,10 @@ export interface AiPlanSlotItem {
   duration: string;
   costINR: number;
   travelDistanceKm: number;
+  highlights?: string;
+  tips?: string;
+  bestTimeToVisit?: string;
+  whatToExpect?: string;
 }
 
 export interface AiPlanDay {
@@ -123,6 +127,10 @@ class ApiService {
     budget: number;
     travelers: number;
     interests: string[];
+    customDestinations?: string[];
+    customActivities?: string[];
+    activitiesPerDay?: number;
+    tripStyle?: string;
   }): Promise<TripPlanResponse> {
     return this.makeRequest<TripPlanResponse>('/ai/plan-trip', {
       method: 'POST',

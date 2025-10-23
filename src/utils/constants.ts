@@ -30,6 +30,7 @@ export const TRAVEL_INTERESTS = [
   { id: 'wildlife', label: '🦅 Wildlife', color: 'bg-emerald-500' }
 ] as const;
 
+
 export const COLORS = {
   saffron: '#FF9933',
   white: '#FFFFFF',

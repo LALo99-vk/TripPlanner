@@ -71,7 +71,7 @@ Context: ${context || 'General travel assistance'}`;
 // AI Trip Planning endpoint (returns structured JSON)
 app.post('/api/ai/plan-trip', async (req, res) => {
   try {
-    const { from, to, startDate, endDate, budget, travelers, interests } = req.body;
+    const { from, to, startDate, endDate, budget, travelers, interests, customDestinations, customActivities, activitiesPerDay, tripStyle } = req.body;
 
     const prompt = `You are WanderWise, generate a fully structured trip plan strictly as valid JSON only, with no markdown.
 
@@ -83,12 +83,22 @@ endDate: ${endDate}
 budgetINR: ${budget}
 travelers: ${travelers}
 interests: ${Array.isArray(interests) ? interests.join(', ') : interests}
+activitiesPerDay: ${activitiesPerDay || 3}
+${customDestinations && customDestinations.length > 0 ? `customDestinations: ${customDestinations.join(', ')}` : ''}
+${customActivities && customActivities.length > 0 ? `customActivities: ${customActivities.join(', ')}` : ''}
+${tripStyle ? `tripStyle: ${tripStyle}` : ''}
 
 Rules:
 - Output MUST be strictly JSON parseable. Do not include code fences or commentary.
 - Use Indian Rupees (INR) with numeric costs (no symbols), client will format.
 - Provide hidden gems and famous places aligned to interests.
 - Ensure total estimated cost is within budget; if over, note a budgetWarning string.
+- CRITICAL: Generate exactly ${activitiesPerDay || 3} activities for EACH AND EVERY day of the trip.
+- EVERY SINGLE DAY must have exactly ${activitiesPerDay || 3} activities - no more, no less.
+- Distribute activities logically across time slots (morning, afternoon, evening) for each day.
+- Include custom destinations and activities if provided.
+- Match the trip style preference if specified.
+- For a 3-day trip with ${activitiesPerDay || 3} activities per day, you must generate ${activitiesPerDay || 3} activities for Day 1, ${activitiesPerDay || 3} activities for Day 2, and ${activitiesPerDay || 3} activities for Day 3.
 
 JSON schema (example keys; follow names exactly):
 {
@@ -107,7 +117,7 @@ JSON schema (example keys; follow names exactly):
       "header": string,
       "slots": {
         "morning": [
-          {"name": string, "description": string, "location": string, "duration": string, "costINR": number, "travelDistanceKm": number}
+          {"name": string, "description": string, "location": string, "duration": string, "costINR": number, "travelDistanceKm": number, "highlights": string, "tips": string, "bestTimeToVisit": string, "whatToExpect": string}
         ],
         "afternoon": [...],
         "evening": [...]
@@ -121,30 +131,120 @@ JSON schema (example keys; follow names exactly):
     "breakdown": {"stay": number, "food": number, "transport": number, "activities": number, "misc": number}
   },
   "budgetWarning": string | null
-}`;
+}
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        { role: "system", content: "You are an expert Indian travel planner. Always return STRICT JSON per user schema, with realistic INR costs and distances." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 1500,
-      temperature: 0.7,
-    });
+IMPORTANT: 
+- Each day must contain exactly ${activitiesPerDay || 3} activities total across all time slots (morning + afternoon + evening).
+- This applies to ALL days in the trip - Day 1, Day 2, Day 3, etc.
+- You must generate ${activitiesPerDay || 3} activities for each day of the trip.
+- Distribute them logically based on the activity type and timing.
+- Do not skip any day - every day must have the full count of activities.`;
+
+    console.log('Generating trip plan with activitiesPerDay:', activitiesPerDay);
+    
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          { role: "system", content: `You are an expert Indian travel planner. Always return STRICT JSON per user schema, with realistic INR costs and distances. CRITICAL: Generate exactly ${activitiesPerDay || 3} activities for EVERY SINGLE DAY of the trip. Do not skip any day or reduce the activity count.` },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 4000,
+        temperature: 0.7,
+      });
+    } catch (openaiError) {
+      console.error('OpenAI API Error:', openaiError);
+      return res.status(500).json({
+        success: false,
+        error: 'OpenAI API Error',
+        message: 'Failed to generate trip plan from AI',
+        debug: { error: openaiError instanceof Error ? openaiError.message : String(openaiError) }
+      });
+    }
 
     const aiResponse = completion.choices[0]?.message?.content || "{}";
+    const finishReason = completion.choices[0]?.finish_reason;
+    console.log('AI Response length:', aiResponse.length);
+    console.log('Finish reason:', finishReason);
+    console.log('AI Response preview:', aiResponse.substring(0, 200));
+    
+    if (finishReason === 'length') {
+      console.log('WARNING: Response was truncated due to token limit');
+    }
+    
     let parsed;
     try {
       parsed = JSON.parse(aiResponse);
     } catch (e) {
+      console.log('JSON parse error:', e instanceof Error ? e.message : String(e));
       // Try to salvage by trimming code fences if any
-      const trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
-      try { parsed = JSON.parse(trimmed); } catch (e2) { parsed = null; }
+      let trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      
+      // If JSON is truncated, try to fix it
+      if (trimmed.includes('"Unterminated string in JSON"') || !trimmed.endsWith('}')) {
+        console.log('Attempting to fix truncated JSON...');
+        // Try to close any open strings and objects
+        trimmed = trimmed.replace(/,\s*$/, ''); // Remove trailing comma
+        if (!trimmed.endsWith('}')) {
+          // Count open braces and close them
+          const openBraces = (trimmed.match(/\{/g) || []).length;
+          const closeBraces = (trimmed.match(/\}/g) || []).length;
+          const missingBraces = openBraces - closeBraces;
+          trimmed += '}'.repeat(missingBraces);
+        }
+      }
+      
+      try { 
+        parsed = JSON.parse(trimmed); 
+        console.log('Successfully parsed after trimming/fixing');
+      } catch (e2) { 
+        console.log('Failed to parse even after fixing:', e2 instanceof Error ? e2.message : String(e2));
+        console.log('Trimmed response length:', trimmed.length);
+        console.log('Trimmed response end:', trimmed.substring(Math.max(0, trimmed.length - 200)));
+        parsed = null; 
+      }
     }
 
     if (!parsed) {
-      return res.status(502).json({ success: false, error: 'Invalid AI response', message: 'AI did not return valid JSON' });
+      console.log('Failed to parse AI response as JSON');
+      
+      // If response was truncated, try with a simpler prompt
+      if (finishReason === 'length') {
+        console.log('Attempting with simplified prompt due to truncation...');
+        try {
+          const simplePrompt = `Generate a ${Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1}-day trip from ${from} to ${to} with exactly ${activitiesPerDay || 3} activities per day. Budget: ₹${budget} for ${travelers} travelers. Interests: ${Array.isArray(interests) ? interests.join(', ') : interests}. Return only valid JSON with overview, days array, and totals.`;
+          
+          const simpleCompletion = await openai.chat.completions.create({
+            model: "gpt-4",
+            messages: [
+              { role: "system", content: "You are an expert Indian travel planner. Return only valid JSON." },
+              { role: "user", content: simplePrompt }
+            ],
+            max_tokens: 3000,
+            temperature: 0.7,
+          });
+          
+          const simpleResponse = simpleCompletion.choices[0]?.message?.content || "{}";
+          parsed = JSON.parse(simpleResponse);
+          console.log('Successfully parsed simplified response');
+        } catch (simpleError) {
+          console.log('Simplified prompt also failed:', simpleError instanceof Error ? simpleError.message : String(simpleError));
+        }
+      }
+      
+      if (!parsed) {
+        return res.status(502).json({ 
+          success: false, 
+          error: 'Invalid AI response', 
+          message: 'AI did not return valid JSON',
+          debug: { 
+            responseLength: aiResponse.length, 
+            responsePreview: aiResponse.substring(0, 500),
+            finishReason: finishReason
+          }
+        });
+      }
     }
 
     res.json({
