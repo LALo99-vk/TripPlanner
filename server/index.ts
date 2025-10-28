@@ -145,14 +145,14 @@ IMPORTANT:
     let completion;
     try {
       completion = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
+      model: "gpt-4",
+      messages: [
           { role: "system", content: `You are an expert Indian travel planner. Always return STRICT JSON per user schema, with realistic INR costs and distances. CRITICAL: Generate exactly ${activitiesPerDay || 3} activities for EVERY SINGLE DAY of the trip. Do not skip any day or reduce the activity count.` },
-          { role: "user", content: prompt }
-        ],
+        { role: "user", content: prompt }
+      ],
         max_tokens: 4000,
-        temperature: 0.7,
-      });
+      temperature: 0.7,
+    });
     } catch (openaiError) {
       console.error('OpenAI API Error:', openaiError);
       return res.status(500).json({

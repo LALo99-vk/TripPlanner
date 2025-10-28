@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Spline from '@splinetool/react-spline';
 
 interface HomePageProps {
@@ -6,15 +6,42 @@ interface HomePageProps {
 }
 
 const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
+  const [splineLoaded, setSplineLoaded] = useState(false);
+  const [splineError, setSplineError] = useState(false);
+
+  const handleSplineLoad = () => {
+    setSplineLoaded(true);
+  };
+
+  const handleSplineError = () => {
+    setSplineError(true);
+  };
+
   return (
     <div className="relative min-h-screen overflow-hidden">
       {/* 3D Spline Background */}
-      <div className="absolute inset-0 -z-10">
-        <Spline scene="https://prod.spline.design/2xEIjg1JL1V3Ucgb/scene.splinecode" />
+      <div className="absolute inset-0 -z-10 spline-container">
+        <Spline 
+          scene="https://prod.spline.design/KzdhEaIv2crSYSDv/scene.splinecode"style={{ width: '100%', height: '100%' }}
+          onLoad={handleSplineLoad}
+          onError={handleSplineError}
+        />
       </div>
 
-      {/* Dark overlay for readability */}
-      <div className="absolute inset-0 bg-black/40 -z-10" />
+      {/* Fallback background in case Spline fails */}
+      {splineError && (
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 -z-10" />
+      )}
+
+      {/* Gradient overlay for better text readability */}
+      <div className="absolute inset-0 bg-gradient-to-br from-black/50 via-black/30 to-black/60 -z-10" />
+
+      {/* Loading indicator */}
+      {!splineLoaded && !splineError && (
+        <div className="absolute inset-0 flex items-center justify-center -z-10">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white/30"></div>
+        </div>
+      )}
 
       {/* Hero Section */}
       <section className="min-h-screen flex items-center justify-center px-4">

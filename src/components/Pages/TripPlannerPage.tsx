@@ -15,8 +15,8 @@ interface TripStyle {
 
 const TripPlannerPage: React.FC = () => {
   const [formData, setFormData] = useState({
-    from: 'Mumbai',
-    to: 'Goa',
+    from: 'Bangalore',
+    to: 'Chennai',
     fromCustom: '',
     toCustom: '',
     startDate: '',
@@ -157,17 +157,17 @@ const TripPlannerPage: React.FC = () => {
                     From City
                   </label>
                   <div className="space-y-2">
-                    <select
-                      value={formData.from}
+                  <select
+                    value={formData.from}
                       onChange={(e) => setFormData(prev => ({ ...prev, from: e.target.value, fromCustom: '' }))}
-                      className="w-full px-4 py-3 glass-input rounded-xl"
-                    >
-                      {INDIAN_CITIES.map(city => (
-                        <option key={`from-${city.name}`} value={city.name}>
-                          {city.name}, {city.state}
-                        </option>
-                      ))}
-                    </select>
+                    className="w-full px-4 py-3 glass-input rounded-xl"
+                  >
+                    {INDIAN_CITIES.map(city => (
+                      <option key={`from-${city.name}`} value={city.name}>
+                        {city.name}, {city.state}
+                      </option>
+                    ))}
+                  </select>
                     <div className="text-xs text-secondary text-center">OR</div>
                     <input
                       type="text"
@@ -184,17 +184,17 @@ const TripPlannerPage: React.FC = () => {
                     To City
                   </label>
                   <div className="space-y-2">
-                    <select
-                      value={formData.to}
+                  <select
+                    value={formData.to}
                       onChange={(e) => setFormData(prev => ({ ...prev, to: e.target.value, toCustom: '' }))}
-                      className="w-full px-4 py-3 glass-input rounded-xl"
-                    >
-                      {INDIAN_CITIES.map(city => (
-                        <option key={`to-${city.name}`} value={city.name}>
-                          {city.name}, {city.state}
-                        </option>
-                      ))}
-                    </select>
+                    className="w-full px-4 py-3 glass-input rounded-xl"
+                  >
+                    {INDIAN_CITIES.map(city => (
+                      <option key={`to-${city.name}`} value={city.name}>
+                        {city.name}, {city.state}
+                      </option>
+                    ))}
+                  </select>
                     <div className="text-xs text-secondary text-center">OR</div>
                     <input
                       type="text"
@@ -313,7 +313,7 @@ const TripPlannerPage: React.FC = () => {
                 <label className="block text-sm font-medium text-secondary mb-4">
                   Trip Style
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 accent-white">
                   {tripStyles.map(style => (
                     <button
                       key={style.id}
@@ -363,14 +363,14 @@ const TripPlannerPage: React.FC = () => {
                 <label className="block text-sm font-medium text-secondary mb-3">
                   Specific Activities You Want to Do
                 </label>
-                <div className="flex space-x-2 mb-3">
+                <div className="flex space-x-2 mb-3 text-white">
                   <input
                     type="text"
                     value={customActivityInput}
                     onChange={(e) => setCustomActivityInput(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && addCustomActivity()}
                     placeholder="e.g., scuba diving, temple visits, food tours..."
-                    className="flex-1 px-4 py-3 glass-input rounded-xl"
+                    className="flex-1 px-4 py-3 glass-input rounded-xl text-white"
                   />
                   <button
                     onClick={addCustomActivity}
