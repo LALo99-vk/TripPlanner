@@ -25,20 +25,36 @@ export interface AiPlanOverview {
 
 export interface AiPlanSlotItem {
   name: string;
+  time: string; // Specific time like "09:00", "14:30", "18:00"
   description: string;
   location: string;
   duration: string;
   costINR: number;
   travelDistanceKm: number;
+  transportMode?: string; // e.g., "local cab", "walking", "auto-rickshaw"
+  transportCostINR?: number; // Cost for transport to this activity
+  foodRecommendation?: string; // Nearby cafe/restaurant recommendations
   highlights?: string;
   tips?: string;
   bestTimeToVisit?: string;
   whatToExpect?: string;
+  localInsight?: string; // Hidden gem tip or local secret
+}
+
+export interface AiPlanDayWeather {
+  temperature: number;
+  condition: string;
+  description: string;
+  icon: string;
+  humidity: number;
+  windSpeed: number;
 }
 
 export interface AiPlanDay {
   day: number;
   header: string;
+  date?: string;
+  weather?: AiPlanDayWeather;
   slots: {
     morning: AiPlanSlotItem[];
     afternoon: AiPlanSlotItem[];
