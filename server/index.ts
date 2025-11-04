@@ -802,6 +802,66 @@ Focus on Indian travel booking platforms and realistic pricing in Indian Rupees.
   }
 });
 
+// AI Emergency Contacts endpoint
+app.post('/api/ai/emergency-contacts', async (req, res) => {
+  try {
+    const { destination, stateOrCountry } = req.body;
+    const place = destination || 'India';
+
+    const prompt = `Provide emergency contact details for travelers in ${place}${stateOrCountry ? ', ' + stateOrCountry : ''}.
+
+Return STRICT JSON only, no markdown, using this schema exactly:
+{
+  "general": {
+    "police": { "number": string, "note": string },
+    "ambulance": { "number": string, "note": string },
+    "fire": { "number": string, "note": string },
+    "womenHelpline": { "number": string, "note": string },
+    "touristHelpline": { "number": string, "note": string }
+  },
+  "local": {
+    "primaryCity": string,
+    "nearestHospitals": [ { "name": string, "phone": string, "address": string, "open24x7": boolean } ],
+    "nearestPoliceStations": [ { "name": string, "phone": string, "address": string } ]
+  },
+  "tips": [string]
+}
+
+Rules:
+- Prefer authoritative national numbers for India where relevant
+- Provide 2-4 local hospitals and 2-3 police stations within/near the city
+- If exact local numbers are uncertain, provide best-known alternatives and add a note in tips to confirm locally
+- Keep values realistic and safe.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are a safety assistant for travelers in India. Always return strict JSON matching the user schema.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 900,
+      temperature: 0.3,
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content || '{}';
+    let parsed: any = null;
+    try { parsed = JSON.parse(aiResponse); } catch {
+      let trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      const firstBrace = trimmed.indexOf('{');
+      if (firstBrace > 0) trimmed = trimmed.substring(firstBrace);
+      const lastBrace = trimmed.lastIndexOf('}');
+      if (lastBrace >= 0 && lastBrace < trimmed.length - 1) trimmed = trimmed.substring(0, lastBrace + 1);
+      trimmed = trimmed.replace(/,(\s*[}\]])/g, '$1');
+      try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+    }
+    if (!parsed) return res.status(502).json({ success: false, error: 'Invalid AI response' });
+    res.json({ success: true, data: parsed, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('Emergency Contacts Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get emergency contacts', message: 'Please try again later' });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 WanderWise API Server running on port ${PORT}`);

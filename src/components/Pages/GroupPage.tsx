@@ -4,6 +4,10 @@ import AuthPage from '../Auth/AuthPage';
 import TripDashboard from '../Group/TripDashboard';
 import TripPlanningPage from '../Group/TripPlanningPage';
 import ShareExperienceModal from '../Group/ShareExperienceModal';
+import { planStore } from '../../services/planStore';
+import { useEffect } from 'react';
+import { listUserPlans } from '../../services/planRepository';
+import { db } from '../../config/firebase';
 
 const GroupPage: React.FC = () => {
   const { user, loading } = useAuth();
@@ -14,6 +18,28 @@ const GroupPage: React.FC = () => {
     name: string;
     destination: string;
   } | null>(null);
+  const [latestPlanName, setLatestPlanName] = useState<string | null>(null);
+  const [pastPlansCount, setPastPlansCount] = useState<number>(0);
+
+  useEffect(() => {
+    const plan = planStore.getPlan();
+    if (plan) {
+      setLatestPlanName(`${plan.overview.to} (${plan.overview.durationDays}D)`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const fetchCount = async () => {
+      if (!user) return;
+      try {
+        const plans = await listUserPlans(user.uid);
+        setPastPlansCount(plans.length);
+      } catch (e) {
+        // ignore count errors
+      }
+    };
+    fetchCount();
+  }, [user]);
 
   // Show loading spinner while checking authentication
   if (loading) {
@@ -55,6 +81,21 @@ const GroupPage: React.FC = () => {
   // Show trip dashboard for authenticated users
   return (
     <>
+      {/* Context banner */}
+      <div className="p-4">
+        <div className="glass-card p-4 flex items-center justify-between">
+          <div className="text-sm text-secondary">
+            {latestPlanName ? (
+              <span>Latest plan: <span className="text-primary font-semibold">{latestPlanName}</span></span>
+            ) : (
+              <span>No plan loaded yet</span>
+            )}
+          </div>
+          <div className="text-sm text-secondary">
+            Past trips: <span className="text-primary font-semibold">{pastPlansCount}</span>
+          </div>
+        </div>
+      </div>
       <TripDashboard 
         onTripSelect={setSelectedTripId} 
         onShareExperience={handleShareExperience}

@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import Header from './components/Layout/Header';
 import Sidebar from './components/Layout/Sidebar';
+import { useEffect } from 'react';
+import { auth } from './config/firebase';
+import { getLatestUserPlan } from './services/planRepository';
+import { planStore } from './services/planStore';
 import HomePage from './components/Pages/HomePage';
 import TripPlannerPage from './components/Pages/TripPlannerPage';
 import YourPlanPage from './components/Pages/YourPlanPage';
@@ -12,8 +16,9 @@ import WalkieTalkiePage from './components/Pages/WalkieTalkiePage';
 import EmergencyPage from './components/Pages/EmergencyPage';
 import DiscoverPage from './components/Pages/DiscoverPage';
 import ProfilePage from './components/Pages/ProfilePage';
+import MyPlansPage from './components/Pages/MyPlansPage';
 
-type PageType = 'home' | 'plan' | 'yourplan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile';
+type PageType = 'home' | 'plan' | 'yourplan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile' | 'myplans';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('home');
@@ -25,6 +30,23 @@ function App() {
     };
     window.addEventListener('navigate', handler as any);
     return () => window.removeEventListener('navigate', handler as any);
+  }, []);
+
+  // On auth ready, load latest plan for the user into planStore to provide context across pages
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      if (u) {
+        try {
+          const latest = await getLatestUserPlan(u.uid);
+          if (latest?.plan) {
+            planStore.setPlan(latest.plan);
+          }
+        } catch (e) {
+          console.error('Failed to load latest plan:', e);
+        }
+      }
+    });
+    return () => unsub();
   }, []);
 
   const renderPage = () => {
@@ -51,6 +73,8 @@ function App() {
         return <DiscoverPage />;
       case 'profile':
         return <ProfilePage />;
+      case 'myplans':
+        return <MyPlansPage />;
       default:
         return <HomePage onPageChange={setCurrentPage} />;
     }

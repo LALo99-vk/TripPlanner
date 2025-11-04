@@ -1,11 +1,37 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Phone, MapPin, Share, Clock, Shield, Zap } from 'lucide-react';
 import { EMERGENCY_NUMBERS } from '../../utils/constants';
+import { planStore } from '../../services/planStore';
+import { apiService, EmergencyContactsData } from '../../services/api';
 
 const EmergencyPage: React.FC = () => {
   const [sosActivated, setSosActivated] = useState(false);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [latestPlanName, setLatestPlanName] = useState<string | null>(null);
+  const [emergencyData, setEmergencyData] = useState<EmergencyContactsData | null>(null);
+  const [loadingEmergency, setLoadingEmergency] = useState(false);
+  const [emergencyError, setEmergencyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const plan = planStore.getPlan();
+    if (plan) setLatestPlanName(`${plan.overview.to} (${plan.overview.durationDays}D)`);
+    // Fetch AI-generated emergency contacts for the destination
+    const fetchEmergency = async () => {
+      if (!plan?.overview?.to) return;
+      setLoadingEmergency(true);
+      setEmergencyError(null);
+      try {
+        const resp = await apiService.getEmergencyContacts({ destination: plan.overview.to });
+        setEmergencyData(resp.data);
+      } catch (e) {
+        setEmergencyError('Unable to fetch emergency contacts at the moment.');
+      } finally {
+        setLoadingEmergency(false);
+      }
+    };
+    fetchEmergency();
+  }, []);
 
   const activateSOS = () => {
     if (sosActivated) return;
@@ -61,9 +87,10 @@ const EmergencyPage: React.FC = () => {
       <div className="content-container">
         {/* Header */}
         <div className="text-center mb-10">
-          <h1 className="text-4xl font-bold text-primary mb-4">
-            Emergency Assistance
-          </h1>
+          <h1 className="text-4xl font-bold text-primary mb-2">Emergency Assistance</h1>
+          {latestPlanName && (
+            <div className="text-sm text-secondary">For trip: <span className="text-primary font-semibold">{latestPlanName}</span></div>
+          )}
           <p className="text-xl text-secondary">
             Quick access to emergency services and safety features
           </p>
@@ -145,6 +172,61 @@ const EmergencyPage: React.FC = () => {
                   <span className="font-medium text-primary">Send Group Alert</span>
                 </button>
               </div>
+            </div>
+
+            {/* AI Emergency Contacts */}
+            <div className="glass-card p-6">
+              <h3 className="text-xl font-bold text-primary mb-4">Emergency Contacts for {latestPlanName || 'Your Trip'}</h3>
+              {loadingEmergency && (
+                <div className="text-secondary text-sm">Fetching emergency contacts...</div>
+              )}
+              {emergencyError && (
+                <div className="text-sm text-red-400">{emergencyError}</div>
+              )}
+              {emergencyData && (
+                <div className="space-y-4 text-sm">
+                  <div>
+                    <div className="font-semibold text-primary mb-2">General</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="glass-card p-3">Police: {emergencyData.general.police.number} <span className="text-secondary">• {emergencyData.general.police.note}</span></div>
+                      <div className="glass-card p-3">Ambulance: {emergencyData.general.ambulance.number} <span className="text-secondary">• {emergencyData.general.ambulance.note}</span></div>
+                      <div className="glass-card p-3">Fire: {emergencyData.general.fire.number} <span className="text-secondary">• {emergencyData.general.fire.note}</span></div>
+                      <div className="glass-card p-3">Women Helpline: {emergencyData.general.womenHelpline.number} <span className="text-secondary">• {emergencyData.general.womenHelpline.note}</span></div>
+                      <div className="glass-card p-3">Tourist Helpline: {emergencyData.general.touristHelpline.number} <span className="text-secondary">• {emergencyData.general.touristHelpline.note}</span></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-primary mb-2">Nearest Hospitals ({emergencyData.local.primaryCity})</div>
+                    <div className="space-y-2">
+                      {emergencyData.local.nearestHospitals.map((h, idx) => (
+                        <div key={idx} className="glass-card p-3">
+                          <div className="font-semibold">{h.name}</div>
+                          <div className="text-secondary">{h.phone} • {h.address} {h.open24x7 ? '• 24x7' : ''}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-primary mb-2">Nearest Police Stations</div>
+                    <div className="space-y-2">
+                      {emergencyData.local.nearestPoliceStations.map((p, idx) => (
+                        <div key={idx} className="glass-card p-3">
+                          <div className="font-semibold">{p.name}</div>
+                          <div className="text-secondary">{p.phone} • {p.address}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {emergencyData.tips?.length > 0 && (
+                    <div>
+                      <div className="font-semibold text-primary mb-2">Tips</div>
+                      <ul className="list-disc list-inside text-secondary space-y-1">
+                        {emergencyData.tips.map((t, i) => (<li key={i}>{t}</li>))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Safety Tips */}

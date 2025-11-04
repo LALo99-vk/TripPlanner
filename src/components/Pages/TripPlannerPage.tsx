@@ -4,6 +4,8 @@ import { INDIAN_CITIES, TRAVEL_INTERESTS } from '../../utils/constants';
 import { TravelInterest } from '../../types';
 import { apiService } from '../../services/api';
 import { planStore } from '../../services/planStore';
+import { auth } from '../../config/firebase';
+import { saveUserPlan } from '../../services/planRepository';
 
 interface TripStyle {
   id: string;
@@ -116,6 +118,15 @@ const TripPlannerPage: React.FC = () => {
 
       const ai = response.data;
       planStore.setPlan(ai);
+      // Persist to Firestore if user is logged in
+      const user = auth.currentUser;
+      if (user) {
+        try {
+          await saveUserPlan(user.uid, ai);
+        } catch (e) {
+          console.error('Failed to save plan to Firestore:', e);
+        }
+      }
       
       // Navigate to Your Plan page automatically
       const evt = new CustomEvent('navigate', { detail: { page: 'yourplan' } });

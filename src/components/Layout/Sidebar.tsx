@@ -25,6 +25,7 @@ const navigationItems = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'plan', label: 'Plan My Trip', icon: MapPin },
   { id: 'yourplan', label: 'Your Plan', icon: MapPin },
+  { id: 'myplans', label: 'My Plans', icon: MapPin },
   { id: 'booking', label: 'Book Tickets', icon: Ticket },
   { id: 'chat', label: 'AI Assistant', icon: MessageCircle },
   { id: 'budget', label: 'Budget Planner', icon: PiggyBank },

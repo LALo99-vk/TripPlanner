@@ -100,6 +100,23 @@ export interface BookingRecommendationsResponse {
   timestamp: string;
 }
 
+export interface EmergencyContactsGeneral {
+  police: { number: string; note: string };
+  ambulance: { number: string; note: string };
+  fire: { number: string; note: string };
+  womenHelpline: { number: string; note: string };
+  touristHelpline: { number: string; note: string };
+}
+
+export interface EmergencyLocalHospital { name: string; phone: string; address: string; open24x7: boolean }
+export interface EmergencyLocalStation { name: string; phone: string; address: string }
+
+export interface EmergencyContactsData {
+  general: EmergencyContactsGeneral;
+  local: { primaryCity: string; nearestHospitals: EmergencyLocalHospital[]; nearestPoliceStations: EmergencyLocalStation[] };
+  tips: string[];
+}
+
 class ApiService {
   private async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     try {
@@ -197,6 +214,13 @@ class ApiService {
     return this.makeRequest<BookingRecommendationsResponse>('/ai/booking-recommendations', {
       method: 'POST',
       body: JSON.stringify(bookingData),
+    });
+  }
+
+  async getEmergencyContacts(params: { destination: string; stateOrCountry?: string }): Promise<{ success: boolean; data: EmergencyContactsData; timestamp: string }> {
+    return this.makeRequest('/ai/emergency-contacts', {
+      method: 'POST',
+      body: JSON.stringify(params),
     });
   }
 

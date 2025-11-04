@@ -5,6 +5,8 @@ import { ChevronDown, ChevronRight, Clock, Download, Link2, Save, Share2 } from 
 import { useWeatherForecast } from '../../services/weatherService';
 import { generateWeatherRecommendation } from '../../services/recommendationService';
 import WeatherCard from '../Weather/WeatherCard';
+import { auth } from '../../config/firebase';
+import { saveUserPlan } from '../../services/planRepository';
 
 const YourPlanPage: React.FC = () => {
   const [plan, setPlan] = useState<AiTripPlanData | null>(planStore.getPlan());
@@ -77,6 +79,21 @@ const YourPlanPage: React.FC = () => {
     alert('Saved to your profile (local library).');
   };
 
+  const handleSaveToFirestore = async () => {
+    if (!plan) { alert('No plan to save'); return; }
+    const user = auth.currentUser;
+    if (!user) { alert('Please sign in to save plans to your profile.'); return; }
+    const name = window.prompt('Enter a name for this plan:', `${plan.overview.to} (${plan.overview.durationDays}D)`);
+    if (!name) return;
+    try {
+      await saveUserPlan(user.uid, plan, name);
+      alert('Plan saved to your profile in the cloud.');
+    } catch (e) {
+      console.error(e);
+      alert('Failed to save plan. Please try again.');
+    }
+  };
+
   if (!plan) {
     return (
       <div className="min-h-screen p-6">
@@ -102,7 +119,8 @@ const YourPlanPage: React.FC = () => {
             <div className="flex gap-2">
               <button onClick={handleDownloadPdf} className="premium-button-primary px-4 py-2 rounded-xl flex items-center"><Download className="h-4 w-4 mr-2"/>Download PDF</button>
               <button onClick={handleShareLink} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Link2 className="h-4 w-4 mr-2"/>Share Link</button>
-              <button onClick={handleSaveProfile} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Save className="h-4 w-4 mr-2"/>Save</button>
+              <button onClick={handleSaveProfile} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Save className="h-4 w-4 mr-2"/>Save (Local)</button>
+              <button onClick={handleSaveToFirestore} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Save className="h-4 w-4 mr-2"/>Save to Profile</button>
             </div>
           </div>
           {plan.overview.summary && (
