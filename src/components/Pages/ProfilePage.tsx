@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { MapPin, Users, Calendar, Settings, Grid, Heart } from 'lucide-react';
-import { doc, getDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '../../config/firebase';
 import { useAuth } from '../../hooks/useAuth';
+import { listUserPlans, SavedPlanRecord, subscribeUserPlans } from '../../services/planRepository';
+import { planStore } from '../../services/planStore';
+import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 
 interface UserProfile {
   displayName: string;
@@ -28,40 +29,85 @@ const ProfilePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'posts' | 'liked'>('posts');
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
+  const [plans, setPlans] = useState<SavedPlanRecord[]>([]);
 
   useEffect(() => {
     if (!user) return;
 
-    // Load user profile
+    // Load user profile from Supabase
     const loadProfile = async () => {
       try {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists()) {
-          setProfile(userDoc.data() as UserProfile);
+        const supabase = await getAuthenticatedSupabaseClient();
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', user.uid)
+          .single();
+
+        if (error) {
+          console.error('Error loading profile:', error);
+          setLoading(false);
+          return;
+        }
+
+        if (data) {
+          setProfile({
+            displayName: data.display_name || '',
+            photoURL: data.photo_url || '',
+            bio: data.bio || '',
+            followersCount: data.followers_count || 0,
+            followingCount: data.following_count || 0,
+            tripsCount: data.trips_count || 0,
+          });
         }
       } catch (error) {
         console.error('Error loading profile:', error);
       }
     };
 
-    // Load user's posts
-    const postsQuery = query(
-      collection(db, 'posts'),
-      where('authorId', '==', user.uid)
-    );
+    // Load user's posts from Supabase
+    const loadPosts = async () => {
+      try {
+        const supabase = await getAuthenticatedSupabaseClient();
+        const { data, error } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('author_id', user.uid)
+          .order('created_at', { ascending: false });
 
-    const unsubscribe = onSnapshot(postsQuery, (snapshot) => {
-      const postsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as TripPost[];
-      
-      setPosts(postsData);
-      setLoading(false);
-    });
+        if (error) {
+          console.error('Error loading posts:', error);
+          setLoading(false);
+          return;
+        }
+
+        if (data) {
+          const postsData: TripPost[] = data.map((post) => ({
+            id: post.id,
+            mediaUrls: post.media_urls || [],
+            caption: post.caption || '',
+            location: post.location || '',
+            likesCount: post.likes_count || 0,
+            timestamp: post.created_at,
+          }));
+          setPosts(postsData);
+        }
+        setLoading(false);
+      } catch (error) {
+        console.error('Error loading posts:', error);
+        setLoading(false);
+      }
+    };
 
     loadProfile();
-    return () => unsubscribe();
+    loadPosts();
+
+    // Load user's saved plans (history) in real-time
+    const unsubPlans = subscribeUserPlans(user.uid, (recs) => setPlans(recs));
+    
+    return () => {
+      unsubPlans();
+    };
   }, [user]);
 
   if (loading) {
@@ -113,7 +159,7 @@ const ProfilePage: React.FC = () => {
               {/* Stats */}
               <div className="flex justify-center md:justify-start space-x-8 mb-4">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-gray-900">{profile.tripsCount}</div>
+                  <div className="text-2xl font-bold text-gray-900">{profile.tripsCount || plans.length}</div>
                   <div className="text-sm text-gray-600">Trips</div>
                 </div>
                 <div className="text-center">
@@ -132,6 +178,41 @@ const ProfilePage: React.FC = () => {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Trip History */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-900">Trip History</h2>
+            <div className="text-sm text-gray-600">{plans.length} saved plan{plans.length === 1 ? '' : 's'}</div>
+          </div>
+          {plans.length === 0 ? (
+            <div className="text-gray-600 text-sm">No saved plans yet. Generate a plan and tap “Save to Profile”.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {plans.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    planStore.setPlan(p.plan);
+                    const evt = new CustomEvent('navigate', { detail: { page: 'yourplan' } });
+                    window.dispatchEvent(evt as any);
+                  }}
+                  className="w-full text-left p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow"
+                >
+                  <div className="font-semibold text-gray-900">{p.name}</div>
+                  <div className="text-sm text-gray-600">{p.plan.overview.from} → {p.plan.overview.to} • {p.plan.overview.durationDays} Days</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {p.createdAt instanceof Date 
+                      ? p.createdAt.toLocaleString() 
+                      : typeof p.createdAt === 'string' 
+                        ? new Date(p.createdAt).toLocaleString() 
+                        : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Content Tabs */}

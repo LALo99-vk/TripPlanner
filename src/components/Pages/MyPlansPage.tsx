@@ -41,7 +41,13 @@ const MyPlansPage: React.FC = () => {
             {plans.map((p) => (
               <button key={p.id} onClick={() => openPlan(p)} className="glass-card p-4 text-left hover:bg-white/10 transition-colors">
                 <div className="text-lg font-semibold text-primary">{p.name}</div>
-                <div className="text-sm text-secondary">{p.createdAt?.toDate ? p.createdAt.toDate().toLocaleString() : ''}</div>
+                <div className="text-sm text-secondary">
+                  {p.createdAt instanceof Date 
+                    ? p.createdAt.toLocaleString() 
+                    : typeof p.createdAt === 'string' 
+                      ? new Date(p.createdAt).toLocaleString() 
+                      : ''}
+                </div>
                 <div className="text-sm text-secondary mt-1">{p.plan.overview.from} → {p.plan.overview.to} • {p.plan.overview.durationDays} Days</div>
               </button>
             ))}
@@ -56,5 +62,7 @@ const MyPlansPage: React.FC = () => {
 };
 
 export default MyPlansPage;
+
+
 
 

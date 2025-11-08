@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { X, Upload, MapPin, Users, Camera } from 'lucide-react';
-import { addDoc, collection, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../../config/firebase';
+import { storage } from '../../config/firebase';
 import { useAuth } from '../../hooks/useAuth';
+import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 
 interface ShareExperienceModalProps {
   isOpen: boolean;
@@ -52,25 +52,40 @@ const ShareExperienceModal: React.FC<ShareExperienceModalProps> = ({
         mediaUrls.push(downloadURL);
       }
 
-      // Create post document
-      await addDoc(collection(db, 'posts'), {
-        authorId: user.uid,
-        authorName: user.displayName || 'Anonymous',
-        authorPhoto: user.photoURL || '',
-        tripId: tripId,
-        caption: caption.trim(),
-        mediaUrls: mediaUrls,
-        location: destination,
-        tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag),
-        likesCount: 0,
-        commentsCount: 0,
-        timestamp: serverTimestamp()
-      });
+      // Create post document in Supabase
+      const supabase = await getAuthenticatedSupabaseClient();
+      
+      const { error: postError } = await supabase
+        .from('posts')
+        .insert({
+          author_id: user.uid,
+          trip_id: tripId,
+          caption: caption.trim(),
+          media_urls: mediaUrls,
+          location: destination,
+          tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag),
+          likes_count: 0,
+          comments_count: 0,
+        });
 
-      // Update user's trips count
-      await updateDoc(doc(db, 'users', user.uid), {
-        tripsCount: increment(1)
-      });
+      if (postError) {
+        console.error('Error creating post:', postError);
+        throw postError;
+      }
+
+      // Update user's trips_count in Supabase
+      const { data: userData } = await supabase
+        .from('users')
+        .select('trips_count')
+        .eq('id', user.uid)
+        .single();
+
+      const currentCount = (userData?.trips_count || 0) as number;
+
+      await supabase
+        .from('users')
+        .update({ trips_count: currentCount + 1 })
+        .eq('id', user.uid);
 
       // Reset form and close modal
       setCaption('');

@@ -32,6 +32,17 @@ const YourPlanPage: React.FC = () => {
     return unsub;
   }, []);
   
+  // One-time tip after redirect
+  useEffect(() => {
+    try {
+      const tip = localStorage.getItem('show_yourplan_tip');
+      if (tip) {
+        alert('Your plan is ready on this page. Tip: You can save it to your profile or export a PDF.');
+        localStorage.removeItem('show_yourplan_tip');
+      }
+    } catch {}
+  }, []);
+  
   // Generate weather-based recommendations when forecast or plan changes
   useEffect(() => {
     if (forecast && plan) {
@@ -275,9 +286,9 @@ const YourPlanPage: React.FC = () => {
                                 </div>
                               )}
                               <div className="flex gap-2 mt-3">
-                                {it.location && (
-                                  <a href={mapLink(it.location)} target="_blank" rel="noreferrer" className="premium-button-secondary px-4 py-2 text-sm rounded-lg inline-block">View on Map</a>
-                                )}
+                              {it.location && (
+                                <a href={mapLink(it.location)} target="_blank" rel="noreferrer" className="premium-button-secondary px-4 py-2 text-sm rounded-lg inline-block">View on Map</a>
+                              )}
                               </div>
                             </div>
                           </div>

@@ -6,6 +6,7 @@ import { apiService } from '../../services/api';
 import { planStore } from '../../services/planStore';
 import { auth } from '../../config/firebase';
 import { saveUserPlan } from '../../services/planRepository';
+import { useAuth } from '../../hooks/useAuth';
 
 interface TripStyle {
   id: string;
@@ -16,6 +17,7 @@ interface TripStyle {
 
 
 const TripPlannerPage: React.FC = () => {
+  const { user } = useAuth();
   const [formData, setFormData] = useState({
     from: 'Bangalore',
     to: 'Chennai',
@@ -129,6 +131,7 @@ const TripPlannerPage: React.FC = () => {
       }
       
       // Navigate to Your Plan page automatically
+      try { localStorage.setItem('show_yourplan_tip', '1'); } catch {}
       const evt = new CustomEvent('navigate', { detail: { page: 'yourplan' } });
       window.dispatchEvent(evt as any);
     } catch (error) {
@@ -143,6 +146,12 @@ const TripPlannerPage: React.FC = () => {
   return (
     <div className="min-h-screen p-6">
       <div className="content-container">
+        {/* Non-blocking reminder to sign in */}
+        {!user && (
+          <div className="glass-card p-3 mb-4 text-sm text-secondary">
+            Reminder: Sign in with your Google account to save and access your plans across devices. You can still generate plans without signing in.
+          </div>
+        )}
         {/* Header */}
         <div className="text-center mb-10">
           <h1 className="text-4xl font-bold text-primary mb-4">

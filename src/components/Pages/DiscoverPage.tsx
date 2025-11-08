@@ -1,22 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { Heart, MessageCircle, Share, MapPin, Calendar, Users } from 'lucide-react';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, increment } from 'firebase/firestore';
-import { db } from '../../config/firebase';
 import { useAuth } from '../../hooks/useAuth';
+import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 
 interface TripPost {
   id: string;
-  authorId: string;
-  authorName: string;
-  authorPhoto: string;
-  tripId: string;
+  author_id: string;
+  author_name?: string;
+  author_photo?: string;
+  trip_id?: string;
   caption: string;
-  mediaUrls: string[];
+  media_urls: string[];
   location: string;
-  tags: string[];
-  likesCount: number;
-  commentsCount: number;
-  timestamp: any;
+  tags?: string[];
+  likes_count: number;
+  comments_count?: number;
+  created_at: string | Date;
 }
 
 const DiscoverPage: React.FC = () => {
@@ -25,31 +24,129 @@ const DiscoverPage: React.FC = () => {
   const { user } = useAuth();
 
   useEffect(() => {
-    const postsQuery = query(
-      collection(db, 'posts'),
-      orderBy('timestamp', 'desc')
-    );
+    let channel: any = null;
+    let supabaseClient: any = null;
 
-    const unsubscribe = onSnapshot(postsQuery, (snapshot) => {
-      const postsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as TripPost[];
-      
-      setPosts(postsData);
-      setLoading(false);
-    });
+    const loadPosts = async () => {
+      try {
+        supabaseClient = await getAuthenticatedSupabaseClient();
+        
+        // Subscribe to real-time changes
+        channel = supabaseClient
+          .channel('posts-changes')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'posts',
+            },
+            async () => {
+              // Refetch posts when changes occur
+              const { data, error } = await supabaseClient
+                .from('posts')
+                .select('*')
+                .order('created_at', { ascending: false });
 
-    return () => unsubscribe();
+              if (error) {
+                console.error('Error loading posts:', error);
+                return;
+              }
+
+              if (data) {
+                // Fetch author details for each post
+                const postsWithAuthors = await Promise.all(
+                  data.map(async (post) => {
+                    const { data: userData } = await supabaseClient
+                      .from('users')
+                      .select('display_name, photo_url')
+                      .eq('id', post.author_id)
+                      .single();
+
+                    return {
+                      ...post,
+                      author_name: userData?.display_name || 'Anonymous',
+                      author_photo: userData?.photo_url || '',
+                    };
+                  })
+                );
+
+                setPosts(postsWithAuthors as TripPost[]);
+                setLoading(false);
+              }
+            }
+          )
+          .subscribe();
+
+        // Initial load
+        const { data, error } = await supabaseClient
+          .from('posts')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          console.error('Error loading posts:', error);
+          setLoading(false);
+          return;
+        }
+
+        if (data) {
+          // Fetch author details for each post
+          const postsWithAuthors = await Promise.all(
+            data.map(async (post) => {
+              const { data: userData } = await supabaseClient
+                .from('users')
+                .select('display_name, photo_url')
+                .eq('id', post.author_id)
+                .single();
+
+              return {
+                ...post,
+                author_name: userData?.display_name || 'Anonymous',
+                author_photo: userData?.photo_url || '',
+              };
+            })
+          );
+
+          setPosts(postsWithAuthors as TripPost[]);
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Error setting up posts subscription:', error);
+        setLoading(false);
+      }
+    };
+
+    loadPosts();
+
+    // Cleanup function
+    return () => {
+      if (channel && supabaseClient) {
+        supabaseClient.removeChannel(channel);
+      }
+    };
   }, []);
 
   const handleLike = async (postId: string) => {
     if (!user) return;
     
     try {
-      await updateDoc(doc(db, 'posts', postId), {
-        likesCount: increment(1)
-      });
+      const supabase = await getAuthenticatedSupabaseClient();
+      
+      // Get current likes count
+      const { data: postData } = await supabase
+        .from('posts')
+        .select('likes_count')
+        .eq('id', postId)
+        .single();
+
+      const currentLikes = (postData?.likes_count || 0) as number;
+
+      // Update likes count
+      await supabase
+        .from('posts')
+        .update({ likes_count: currentLikes + 1 })
+        .eq('id', postId);
     } catch (error) {
       console.error('Error liking post:', error);
     }
@@ -88,33 +185,37 @@ const DiscoverPage: React.FC = () => {
                 {/* Post Header */}
                 <div className="p-4 flex items-center space-x-3">
                   <img 
-                    src={post.authorPhoto || '/default-avatar.png'} 
-                    alt={post.authorName}
+                    src={post.author_photo || '/default-avatar.png'} 
+                    alt={post.author_name || 'User'}
                     className="w-10 h-10 rounded-full"
                   />
                   <div className="flex-1">
-                    <h3 className="font-semibold text-primary">{post.authorName}</h3>
+                    <h3 className="font-semibold text-primary">{post.author_name || 'Anonymous'}</h3>
                     <div className="flex items-center text-sm text-secondary">
                       <MapPin className="h-4 w-4 mr-1" />
                       {post.location}
                     </div>
                   </div>
                   <div className="text-sm text-muted">
-                    {post.timestamp?.toDate?.()?.toLocaleDateString() || 'Recently'}
+                    {post.created_at instanceof Date 
+                      ? post.created_at.toLocaleDateString() 
+                      : typeof post.created_at === 'string' 
+                        ? new Date(post.created_at).toLocaleDateString() 
+                        : 'Recently'}
                   </div>
                 </div>
 
                 {/* Post Media */}
-                {post.mediaUrls.length > 0 && (
+                {post.media_urls && post.media_urls.length > 0 && (
                   <div className="relative">
                     <img 
-                      src={post.mediaUrls[0]} 
+                      src={post.media_urls[0]} 
                       alt="Trip experience"
                       className="w-full h-80 object-cover"
                     />
-                    {post.mediaUrls.length > 1 && (
+                    {post.media_urls.length > 1 && (
                       <div className="absolute top-4 right-4 glass-card px-2 py-1 rounded-full text-sm text-primary">
-                        +{post.mediaUrls.length - 1}
+                        +{post.media_urls.length - 1}
                       </div>
                     )}
                   </div>
@@ -125,7 +226,7 @@ const DiscoverPage: React.FC = () => {
                   <p className="text-primary mb-3">{post.caption}</p>
                   
                   {/* Tags */}
-                  {post.tags.length > 0 && (
+                  {post.tags && post.tags.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-3">
                       {post.tags.map((tag, index) => (
                         <span key={index} className="glass-card px-2 py-1 rounded-full text-sm text-secondary">
@@ -143,12 +244,12 @@ const DiscoverPage: React.FC = () => {
                         className="flex items-center space-x-2 text-secondary hover:text-primary transition-colors"
                       >
                         <Heart className="h-5 w-5" />
-                        <span className="text-sm">{post.likesCount}</span>
+                        <span className="text-sm">{post.likes_count || 0}</span>
                       </button>
                       
                       <button className="flex items-center space-x-2 text-secondary hover:text-primary transition-colors">
                         <MessageCircle className="h-5 w-5" />
-                        <span className="text-sm">{post.commentsCount}</span>
+                        <span className="text-sm">{post.comments_count || 0}</span>
                       </button>
                       
                       <button className="flex items-center space-x-2 text-secondary hover:text-primary transition-colors">

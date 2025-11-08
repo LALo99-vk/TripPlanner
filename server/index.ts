@@ -11,23 +11,38 @@ dotenv.config({ path: '../.env' });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Validate required environment variables
+if (!process.env.OPENAI_API_KEY) {
+  console.error('❌ ERROR: OPENAI_API_KEY is missing!');
+  console.error('📝 Please create a .env file in the server directory with:');
+  console.error('   OPENAI_API_KEY=your_openai_api_key_here');
+  console.error('   OPENWEATHER_API_KEY=your_openweather_api_key_here');
+  console.error('');
+  console.error('💡 Get your keys from:');
+  console.error('   OpenAI: https://platform.openai.com/api-keys');
+  console.error('   OpenWeather: https://openweathermap.org/api');
+  process.exit(1);
+}
+
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 // OpenWeather API Configuration
-const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY || 'c1c06459eef9fe52fc6d1208b9c556ac';
+const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
+
+if (!OPENWEATHER_API_KEY) {
+  console.warn('⚠️  WARNING: OPENWEATHER_API_KEY not found in environment variables');
+  console.warn('   Weather features will not work. Add OPENWEATHER_API_KEY to your .env file');
+  console.warn('   Get your key from: https://openweathermap.org/api');
+} else {
+  const key = OPENWEATHER_API_KEY.trim();
+  console.log(`✅ OpenWeather API key loaded: ${key.substring(0, 4)}...${key.substring(key.length - 4)} (length: ${key.length})`);
+}
+
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
 const OPENWEATHER_GEO_URL = 'https://api.openweathermap.org/geo/1.0'; // Geocoding API uses different base URL
-
-// Debug: Check if API key is loaded (only show first/last 4 chars for security)
-if (process.env.OPENWEATHER_API_KEY) {
-  const key = process.env.OPENWEATHER_API_KEY.trim();
-  console.log(`✅ OpenWeather API key loaded: ${key.substring(0, 4)}...${key.substring(key.length - 4)} (length: ${key.length})`);
-} else {
-  console.warn('⚠️  OPENWEATHER_API_KEY not found in environment variables, using fallback key');
-}
 
 // Weather data interface
 interface WeatherData {
@@ -799,66 +814,6 @@ Focus on Indian travel booking platforms and realistic pricing in Indian Rupees.
       error: 'Failed to get recommendations',
       message: 'Please try again later'
     });
-  }
-});
-
-// AI Emergency Contacts endpoint
-app.post('/api/ai/emergency-contacts', async (req, res) => {
-  try {
-    const { destination, stateOrCountry } = req.body;
-    const place = destination || 'India';
-
-    const prompt = `Provide emergency contact details for travelers in ${place}${stateOrCountry ? ', ' + stateOrCountry : ''}.
-
-Return STRICT JSON only, no markdown, using this schema exactly:
-{
-  "general": {
-    "police": { "number": string, "note": string },
-    "ambulance": { "number": string, "note": string },
-    "fire": { "number": string, "note": string },
-    "womenHelpline": { "number": string, "note": string },
-    "touristHelpline": { "number": string, "note": string }
-  },
-  "local": {
-    "primaryCity": string,
-    "nearestHospitals": [ { "name": string, "phone": string, "address": string, "open24x7": boolean } ],
-    "nearestPoliceStations": [ { "name": string, "phone": string, "address": string } ]
-  },
-  "tips": [string]
-}
-
-Rules:
-- Prefer authoritative national numbers for India where relevant
-- Provide 2-4 local hospitals and 2-3 police stations within/near the city
-- If exact local numbers are uncertain, provide best-known alternatives and add a note in tips to confirm locally
-- Keep values realistic and safe.`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: 'You are a safety assistant for travelers in India. Always return strict JSON matching the user schema.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 900,
-      temperature: 0.3,
-    });
-
-    const aiResponse = completion.choices[0]?.message?.content || '{}';
-    let parsed: any = null;
-    try { parsed = JSON.parse(aiResponse); } catch {
-      let trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
-      const firstBrace = trimmed.indexOf('{');
-      if (firstBrace > 0) trimmed = trimmed.substring(firstBrace);
-      const lastBrace = trimmed.lastIndexOf('}');
-      if (lastBrace >= 0 && lastBrace < trimmed.length - 1) trimmed = trimmed.substring(0, lastBrace + 1);
-      trimmed = trimmed.replace(/,(\s*[}\]])/g, '$1');
-      try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
-    }
-    if (!parsed) return res.status(502).json({ success: false, error: 'Invalid AI response' });
-    res.json({ success: true, data: parsed, timestamp: new Date().toISOString() });
-  } catch (error) {
-    console.error('Emergency Contacts Error:', error);
-    res.status(500).json({ success: false, error: 'Failed to get emergency contacts', message: 'Please try again later' });
   }
 });
 

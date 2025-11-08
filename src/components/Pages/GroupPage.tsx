@@ -7,7 +7,6 @@ import ShareExperienceModal from '../Group/ShareExperienceModal';
 import { planStore } from '../../services/planStore';
 import { useEffect } from 'react';
 import { listUserPlans } from '../../services/planRepository';
-import { db } from '../../config/firebase';
 
 const GroupPage: React.FC = () => {
   const { user, loading } = useAuth();
