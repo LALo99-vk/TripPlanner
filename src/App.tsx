@@ -16,9 +16,8 @@ import WalkieTalkiePage from './components/Pages/WalkieTalkiePage';
 import EmergencyPage from './components/Pages/EmergencyPage';
 import DiscoverPage from './components/Pages/DiscoverPage';
 import ProfilePage from './components/Pages/ProfilePage';
-import MyPlansPage from './components/Pages/MyPlansPage';
 
-type PageType = 'home' | 'plan' | 'yourplan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile' | 'myplans';
+type PageType = 'home' | 'plan' | 'yourplan' | 'booking' | 'chat' | 'budget' | 'group' | 'walkie' | 'emergency' | 'discover' | 'profile';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('home');
@@ -73,8 +72,6 @@ function App() {
         return <DiscoverPage />;
       case 'profile':
         return <ProfilePage />;
-      case 'myplans':
-        return <MyPlansPage />;
       default:
         return <HomePage onPageChange={setCurrentPage} />;
     }

@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
 import { X, Upload, MapPin, Users, Camera } from 'lucide-react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '../../config/firebase';
 import { useAuth } from '../../hooks/useAuth';
 import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 
@@ -43,18 +41,55 @@ const ShareExperienceModal: React.FC<ShareExperienceModalProps> = ({
 
     setIsUploading(true);
     try {
-      // Upload files to Firebase Storage
+      const supabase = await getAuthenticatedSupabaseClient();
+      
+      // Upload files to Supabase Storage
       const mediaUrls: string[] = [];
       for (const file of selectedFiles) {
-        const storageRef = ref(storage, `posts/${user.uid}/${Date.now()}_${file.name}`);
-        const snapshot = await uploadBytes(storageRef, file);
-        const downloadURL = await getDownloadURL(snapshot.ref);
-        mediaUrls.push(downloadURL);
+        // Validate file type
+        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+          console.warn(`Skipping invalid file type: ${file.type}`);
+          continue;
+        }
+        
+        // Validate file size (max 10MB)
+        const maxSize = 10 * 1024 * 1024; // 10MB
+        if (file.size > maxSize) {
+          console.warn(`Skipping file too large: ${file.name}`);
+          continue;
+        }
+        
+        // Generate unique filename
+        const fileExtension = file.name.split('.').pop() || 'jpg';
+        const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExtension}`;
+        const filePath = `posts/${user.uid}/${fileName}`;
+        
+        // Upload to Supabase Storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('posts')
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false
+          });
+        
+        if (uploadError) {
+          console.error('Error uploading file:', uploadError);
+          throw uploadError;
+        }
+        
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from('posts')
+          .getPublicUrl(filePath);
+        
+        mediaUrls.push(urlData.publicUrl);
+      }
+      
+      if (mediaUrls.length === 0) {
+        throw new Error('No valid files were uploaded');
       }
 
       // Create post document in Supabase
-      const supabase = await getAuthenticatedSupabaseClient();
-      
       const { error: postError } = await supabase
         .from('posts')
         .insert({

@@ -7,6 +7,7 @@ import ShareExperienceModal from '../Group/ShareExperienceModal';
 import { planStore } from '../../services/planStore';
 import { useEffect } from 'react';
 import { listUserPlans } from '../../services/planRepository';
+import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 
 const GroupPage: React.FC = () => {
   const { user, loading } = useAuth();
@@ -19,6 +20,7 @@ const GroupPage: React.FC = () => {
   } | null>(null);
   const [latestPlanName, setLatestPlanName] = useState<string | null>(null);
   const [pastPlansCount, setPastPlansCount] = useState<number>(0);
+  const [userProfileName, setUserProfileName] = useState<string | null>(null);
 
   useEffect(() => {
     const plan = planStore.getPlan();
@@ -28,16 +30,41 @@ const GroupPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const fetchCount = async () => {
+    const fetchData = async () => {
       if (!user) return;
       try {
+        // Fetch plans count
         const plans = await listUserPlans(user.uid);
         setPastPlansCount(plans.length);
+
+        // Fetch user profile name from Supabase
+        const supabase = await getAuthenticatedSupabaseClient();
+        const { data } = await supabase
+          .from('users')
+          .select('display_name')
+          .eq('id', user.uid)
+          .single();
+
+        if (data?.display_name) {
+          setUserProfileName(data.display_name);
+        } else {
+          setUserProfileName(user.displayName || null);
+        }
       } catch (e) {
-        // ignore count errors
+        // ignore errors
+        setUserProfileName(user.displayName || null);
       }
     };
-    fetchCount();
+    fetchData();
+
+    // Listen for profile updates
+    const handleProfileUpdate = () => {
+      fetchData();
+    };
+    window.addEventListener('profileUpdated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('profileUpdated', handleProfileUpdate);
+    };
   }, [user]);
 
   // Show loading spinner while checking authentication
@@ -82,13 +109,20 @@ const GroupPage: React.FC = () => {
     <>
       {/* Context banner */}
       <div className="p-4">
-        <div className="glass-card p-4 flex items-center justify-between">
-          <div className="text-sm text-secondary">
-            {latestPlanName ? (
-              <span>Latest plan: <span className="text-primary font-semibold">{latestPlanName}</span></span>
-            ) : (
-              <span>No plan loaded yet</span>
+        <div className="glass-card p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            {userProfileName && (
+              <div className="text-sm text-secondary">
+                Welcome, <span className="text-primary font-semibold">{userProfileName}</span>
+              </div>
             )}
+            <div className="text-sm text-secondary">
+              {latestPlanName ? (
+                <span>Latest plan: <span className="text-primary font-semibold">{latestPlanName}</span></span>
+              ) : (
+                <span>No plan loaded yet</span>
+              )}
+            </div>
           </div>
           <div className="text-sm text-secondary">
             Past trips: <span className="text-primary font-semibold">{pastPlansCount}</span>

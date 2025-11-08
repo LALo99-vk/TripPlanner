@@ -25,7 +25,6 @@ const navigationItems = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'plan', label: 'Plan My Trip', icon: MapPin },
   { id: 'yourplan', label: 'Your Plan', icon: MapPin },
-  { id: 'myplans', label: 'My Plans', icon: MapPin },
   { id: 'booking', label: 'Book Tickets', icon: Ticket },
   { id: 'chat', label: 'AI Assistant', icon: MessageCircle },
   { id: 'budget', label: 'Budget Planner', icon: PiggyBank },
@@ -37,6 +36,46 @@ const navigationItems = [
 
 const Sidebar: React.FC<SidebarProps> = ({ currentPage, onPageChange, isOpen, onClose }) => {
   const { user, signInWithGoogle, logout } = useAuth();
+  const [profileName, setProfileName] = React.useState<string | null>(null);
+
+  // Load profile name from Supabase
+  React.useEffect(() => {
+    if (!user) {
+      setProfileName(null);
+      return;
+    }
+
+    const loadProfileName = async () => {
+      try {
+        const { getAuthenticatedSupabaseClient } = await import('../../config/supabase');
+        const supabase = await getAuthenticatedSupabaseClient();
+        const { data } = await supabase
+          .from('users')
+          .select('display_name')
+          .eq('id', user.uid)
+          .single();
+
+        if (data?.display_name) {
+          setProfileName(data.display_name);
+        } else {
+          setProfileName(user.displayName || null);
+        }
+      } catch (e) {
+        setProfileName(user.displayName || null);
+      }
+    };
+
+    loadProfileName();
+
+    // Listen for profile updates
+    const handleProfileUpdate = () => {
+      loadProfileName();
+    };
+    window.addEventListener('profileUpdated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('profileUpdated', handleProfileUpdate);
+    };
+  }, [user]);
 
   return (
     <>
@@ -82,21 +121,27 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onPageChange, isOpen, on
               </button>
             ) : (
               <div className="mb-4 p-3 premium-card rounded-lg">
-                <div className="flex items-center space-x-3 mb-2">
+                <button
+                  onClick={() => {
+                    onPageChange('profile');
+                    onClose();
+                  }}
+                  className="w-full flex items-center space-x-3 mb-2 hover:opacity-80 transition-opacity"
+                >
                   <img 
                     src={user.photoURL || '/default-avatar.png'} 
-                    alt={user.displayName || 'User'} 
-                    className="w-10 h-10 rounded-full"
+                    alt={profileName || user.displayName || 'User'} 
+                    className="w-10 h-10 rounded-full border border-white/20"
                   />
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 text-left">
                     <p className="text-sm font-medium text-white truncate">
-                      {user.displayName || 'User'}
+                      {profileName || user.displayName || 'User'}
                     </p>
                     <p className="text-xs text-white/60 truncate">
                       {user.email}
                     </p>
                   </div>
-                </div>
+                </button>
                 <button
                   onClick={logout}
                   className="w-full flex items-center justify-center px-3 py-2 text-xs font-medium text-white/60 hover:text-white hover:bg-white/10 rounded-md transition-colors"
