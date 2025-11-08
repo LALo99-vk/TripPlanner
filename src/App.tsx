@@ -23,6 +23,17 @@ function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('home');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // Handle URL parameters for join links
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const page = params.get('page');
+    const groupId = params.get('groupId');
+    
+    if (page === 'group' || groupId) {
+      setCurrentPage('group');
+    }
+  }, []);
+
   React.useEffect(() => {
     const handler = (e: any) => {
       if (e?.detail?.page) setCurrentPage(e.detail.page);
