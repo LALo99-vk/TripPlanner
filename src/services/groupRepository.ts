@@ -281,6 +281,7 @@ export function subscribeUserGroups(
           filter: `user_id=eq.${userId}`,
         },
         async () => {
+          // Refetch groups when user_groups changes
           const updatedGroups = await getUserGroups(userId);
           callback(updatedGroups);
         }
@@ -288,12 +289,12 @@ export function subscribeUserGroups(
       .on(
         'postgres_changes',
         {
-          event: 'UPDATE',
+          event: '*',
           schema: 'public',
           table: 'groups',
         },
         async () => {
-          // Refetch when any group is updated
+          // Refetch when any group is created or updated
           const updatedGroups = await getUserGroups(userId);
           callback(updatedGroups);
         }

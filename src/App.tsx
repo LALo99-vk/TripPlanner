@@ -23,13 +23,17 @@ function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('home');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Handle URL parameters for join links
+  // Handle URL parameters for join links and group pages
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const page = params.get('page');
     const groupId = params.get('groupId');
     
-    if (page === 'group' || groupId) {
+    // Check for /group/{groupId} path pattern
+    const pathMatch = window.location.pathname.match(/\/group\/([^/]+)/);
+    const pathGroupId = pathMatch ? pathMatch[1] : null;
+    
+    if (page === 'group' || groupId || pathGroupId) {
       setCurrentPage('group');
     }
   }, []);

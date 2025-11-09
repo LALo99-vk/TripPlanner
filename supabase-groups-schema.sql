@@ -51,3 +51,42 @@ CREATE POLICY "Allow authenticated user operations on user_groups"
 CREATE TRIGGER update_groups_updated_at BEFORE UPDATE ON groups
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Group itinerary activities table
+CREATE TABLE IF NOT EXISTS group_itinerary_activities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  date DATE NOT NULL,
+  start_time TIME,
+  end_time TIME,
+  owner_id TEXT NOT NULL, -- Firebase Auth UID
+  owner_name TEXT NOT NULL,
+  last_edited_by TEXT NOT NULL,
+  last_edited_at TIMESTAMPTZ DEFAULT NOW(),
+  location JSONB, -- { name, lat, lng }
+  order_index INTEGER DEFAULT 0,
+  imported_from_user BOOLEAN DEFAULT false,
+  source_plan_id UUID REFERENCES plans(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for itinerary activities
+CREATE INDEX IF NOT EXISTS idx_itinerary_group_id ON group_itinerary_activities(group_id);
+CREATE INDEX IF NOT EXISTS idx_itinerary_date ON group_itinerary_activities(date);
+CREATE INDEX IF NOT EXISTS idx_itinerary_order ON group_itinerary_activities(group_id, date, order_index);
+
+-- Enable RLS
+ALTER TABLE group_itinerary_activities ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policy
+CREATE POLICY "Allow authenticated user operations on itinerary"
+  ON group_itinerary_activities FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+-- Trigger to update updated_at timestamp
+CREATE TRIGGER update_itinerary_updated_at BEFORE UPDATE ON group_itinerary_activities
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

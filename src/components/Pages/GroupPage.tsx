@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import AuthPage from '../Auth/AuthPage';
-import { Plus, Users, MapPin, Calendar, X, Copy, Check, UserPlus, Crown } from 'lucide-react';
+import { Plus, Users, MapPin, Calendar, X, Crown } from 'lucide-react';
+import GroupDetailPage from './GroupDetailPage';
 import {
   createGroup,
   getGroup,
   getUserGroups,
   subscribeUserGroups,
-  subscribeToGroup,
   addMemberToGroup,
   type Group,
   type CreateGroupData,
@@ -22,12 +22,10 @@ interface Toast {
 const GroupPage: React.FC = () => {
   const { user, loading } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [copiedInviteLink, setCopiedInviteLink] = useState<string | null>(null);
 
   const [newGroup, setNewGroup] = useState<CreateGroupData>({
     groupName: '',
@@ -37,22 +35,81 @@ const GroupPage: React.FC = () => {
     description: '',
   });
 
-  // Handle join link from URL
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const groupId = params.get('groupId');
-    
-    if (groupId && user) {
-      handleJoinGroup(groupId);
-      // Clean up URL
-      window.history.replaceState({}, '', window.location.pathname);
+  const handleJoinGroup = async (groupId: string) => {
+    if (!user) {
+      showToast('Please log in to join a group', 'error');
+      return;
     }
-  }, [user]);
+
+    try {
+      await addMemberToGroup(
+        groupId,
+        user.uid,
+        user.displayName || 'User',
+        user.email
+      );
+      showToast('Successfully joined the group!', 'success');
+      
+      // Load and navigate to the group
+      const group = await getGroup(groupId);
+      if (group) {
+        setSelectedGroupId(groupId);
+        window.history.pushState({}, '', `/group/${groupId}`);
+      }
+    } catch (error: any) {
+      console.error('Error joining group:', error);
+      showToast('Failed to join group. You may already be a member.', 'error');
+    }
+  };
+
+  // Handle group ID from URL (both query param and path)
+  useEffect(() => {
+    if (!user || groups.length === 0) return;
+
+    // Check URL path for /group/{groupId} pattern (but not just /group)
+    const pathMatch = window.location.pathname.match(/\/group\/([^/]+)/);
+    const pathGroupId = pathMatch ? pathMatch[1] : null;
+    
+    // Check query param for groupId
+    const params = new URLSearchParams(window.location.search);
+    const queryGroupId = params.get('groupId');
+    
+    const groupId = pathGroupId || queryGroupId;
+    
+    if (groupId) {
+      // Check if user is already a member
+      const isMember = groups.some(g => g.id === groupId);
+      
+      if (isMember) {
+        // User is already a member, navigate to detail page
+        setSelectedGroupId(groupId);
+        // Update URL to show group detail page
+        window.history.pushState({}, '', `/group/${groupId}`);
+      } else {
+        // User is not a member, try to join
+        handleJoinGroup(groupId);
+      }
+      
+      // Clean up URL to remove query params but keep path
+      if (queryGroupId) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } else {
+      // No groupId in URL, make sure we're showing the groups list
+      setSelectedGroupId(null);
+    }
+  }, [user, groups]);
 
   // Load user groups
   useEffect(() => {
     if (!user) return;
 
+    // Initial load
+    getUserGroups(user.uid).then((userGroups) => {
+      setGroups(userGroups);
+    });
+
+    // Subscribe to real-time updates
     const unsubscribe = subscribeUserGroups(user.uid, (updatedGroups) => {
       setGroups(updatedGroups);
     });
@@ -62,25 +119,6 @@ const GroupPage: React.FC = () => {
     };
   }, [user]);
 
-  // Subscribe to selected group for real-time member updates
-  useEffect(() => {
-    if (!selectedGroup) return;
-
-    const unsubscribe = subscribeToGroup(selectedGroup.id, (updatedGroup) => {
-      if (updatedGroup) {
-        setSelectedGroup(updatedGroup);
-        // Show notification when new member joins
-        if (updatedGroup.members.length > (selectedGroup.members.length || 0)) {
-          const newMember = updatedGroup.members[updatedGroup.members.length - 1];
-          showToast(`${newMember.name} has joined the ${updatedGroup.groupName} group!`, 'success');
-        }
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [selectedGroup?.id]);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     const id = Date.now().toString();
@@ -113,8 +151,13 @@ const GroupPage: React.FC = () => {
         description: '',
       });
       
-      // Select the newly created group
-      setSelectedGroup(group);
+      // Manually refresh groups list to ensure new group appears
+      const updatedGroups = await getUserGroups(user.uid);
+      setGroups(updatedGroups);
+      
+      // Navigate to the newly created group
+      setSelectedGroupId(group.id);
+      window.history.pushState({}, '', `/group/${group.id}`);
     } catch (error: any) {
       console.error('Error creating group:', error);
       showToast('Failed to create group. Please try again.', 'error');
@@ -123,43 +166,9 @@ const GroupPage: React.FC = () => {
     }
   };
 
-  const handleJoinGroup = async (groupId: string) => {
-    if (!user) {
-      showToast('Please log in to join a group', 'error');
-      return;
-    }
-
-    try {
-      await addMemberToGroup(
-        groupId,
-        user.uid,
-        user.displayName || 'User',
-        user.email
-      );
-      showToast('Successfully joined the group!', 'success');
-      
-      // Load and select the group
-      const group = await getGroup(groupId);
-      if (group) {
-        setSelectedGroup(group);
-      }
-    } catch (error: any) {
-      console.error('Error joining group:', error);
-      showToast('Failed to join group. You may already be a member.', 'error');
-    }
-  };
-
-  const generateInviteLink = (groupId: string) => {
-    const baseUrl = window.location.origin;
-    return `${baseUrl}?page=group&groupId=${groupId}`;
-  };
-
-  const copyInviteLink = (groupId: string) => {
-    const link = generateInviteLink(groupId);
-    navigator.clipboard.writeText(link);
-    setCopiedInviteLink(groupId);
-    showToast('Invite link copied to clipboard!', 'success');
-    setTimeout(() => setCopiedInviteLink(null), 2000);
+  const handleBackToGroups = () => {
+    setSelectedGroupId(null);
+    window.history.pushState({}, '', '/group');
   };
 
   // Show loading spinner while checking authentication
@@ -177,6 +186,16 @@ const GroupPage: React.FC = () => {
   // Show authentication page if user is not logged in
   if (!user) {
     return <AuthPage />;
+  }
+
+  // Show group detail page if a group is selected
+  if (selectedGroupId) {
+    return (
+      <GroupDetailPage
+        groupId={selectedGroupId}
+        onBack={handleBackToGroups}
+      />
+    );
   }
 
   return (
@@ -197,148 +216,60 @@ const GroupPage: React.FC = () => {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Group List */}
-          <div className="lg:col-span-1">
-            <div className="glass-card p-4">
-              <h2 className="text-xl font-semibold text-primary mb-4">Your Groups</h2>
-              
-              {groups.length === 0 ? (
-                <div className="text-center py-8">
-                  <Users className="h-12 w-12 text-muted mx-auto mb-3" />
-                  <p className="text-muted text-sm mb-4">No groups yet</p>
-                  <button
-                    onClick={() => setShowCreateModal(true)}
-                    className="premium-button-secondary text-sm"
-                  >
-                    Create Your First Group
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {groups.map((group) => (
-                    <div
-                      key={group.id}
-                      onClick={() => setSelectedGroup(group)}
-                      className={`glass-card p-4 cursor-pointer transition-all ${
-                        selectedGroup?.id === group.id
-                          ? 'border-2 border-orange-500'
-                          : 'hover:bg-white/10'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="font-semibold text-primary text-sm">{group.groupName}</h3>
-                        {group.leaderId === user.uid && (
-                          <Crown className="h-4 w-4 text-yellow-500" />
-                        )}
-                      </div>
-                      <div className="flex items-center text-muted text-xs mb-1">
-                        <MapPin className="h-3 w-3 mr-1" />
-                        <span>{group.destination}</span>
-                      </div>
-                      <div className="flex items-center justify-between mt-2">
-                        <div className="flex items-center text-muted text-xs">
-                          <Users className="h-3 w-3 mr-1" />
-                          <span>{group.members.length} members</span>
-                        </div>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          group.status === 'planning'
-                            ? 'bg-blue-500/20 text-blue-300'
-                            : group.status === 'active'
-                            ? 'bg-green-500/20 text-green-300'
-                            : 'bg-gray-500/20 text-gray-300'
-                        }`}>
-                          {group.status}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right: Group Details */}
-          <div className="lg:col-span-2">
-            {selectedGroup ? (
-              <div className="glass-card p-6">
-                <div className="flex items-start justify-between mb-6">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <h2 className="text-2xl font-bold text-primary">{selectedGroup.groupName}</h2>
-                      {selectedGroup.leaderId === user.uid && (
-                        <span className="text-xs bg-yellow-500/20 text-yellow-300 px-2 py-1 rounded flex items-center gap-1">
-                          <Crown className="h-3 w-3" />
-                          Leader
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center text-secondary text-sm gap-4">
-                      <div className="flex items-center gap-1">
-                        <MapPin className="h-4 w-4" />
-                        <span>{selectedGroup.destination}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Calendar className="h-4 w-4" />
-                        <span>
-                          {new Date(selectedGroup.startDate).toLocaleDateString()} -{' '}
-                          {new Date(selectedGroup.endDate).toLocaleDateString()}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  {selectedGroup.leaderId === user.uid && (
-                    <button
-                      onClick={() => setShowInviteModal(true)}
-                      className="premium-button-secondary flex items-center gap-2 text-sm"
-                    >
-                      <UserPlus className="h-4 w-4" />
-                      Invite Member
-                    </button>
-                  )}
-                </div>
-
-                {selectedGroup.description && (
-                  <div className="mb-6">
-                    <p className="text-secondary text-sm">{selectedGroup.description}</p>
-                  </div>
-                )}
-
-                {/* Members Section */}
-                <div>
-                  <h3 className="text-lg font-semibold text-primary mb-4">Members</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {selectedGroup.members.map((member) => (
-                      <div
-                        key={member.uid}
-                        className="glass-card p-3 flex items-center gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white font-semibold">
-                          {member.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-primary font-medium text-sm">{member.name}</span>
-                            {member.uid === selectedGroup.leaderId && (
-                              <Crown className="h-3 w-3 text-yellow-500" />
-                            )}
-                          </div>
-                          {member.email && (
-                            <p className="text-muted text-xs">{member.email}</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+        {/* Group List */}
+        <div className="max-w-4xl mx-auto">
+          <div className="glass-card p-4">
+            <h2 className="text-xl font-semibold text-primary mb-4">Your Groups</h2>
+            
+            {groups.length === 0 ? (
+              <div className="text-center py-8">
+                <Users className="h-12 w-12 text-muted mx-auto mb-3" />
+                <p className="text-muted text-sm mb-4">No groups yet</p>
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="premium-button-secondary text-sm"
+                >
+                  Create Your First Group
+                </button>
               </div>
             ) : (
-              <div className="glass-card p-12 text-center">
-                <MapPin className="h-16 w-16 text-muted mx-auto mb-4" />
-                <h3 className="text-xl font-semibold text-primary mb-2">Select a Group</h3>
-                <p className="text-muted text-sm">
-                  Choose a group from the list to view details and manage members
-                </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {groups.map((group) => (
+                  <div
+                    key={group.id}
+                    onClick={() => {
+                      setSelectedGroupId(group.id);
+                      window.history.pushState({}, '', `/group/${group.id}`);
+                    }}
+                    className="glass-card p-4 cursor-pointer transition-all hover:bg-white/10"
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="font-semibold text-primary text-sm">{group.groupName}</h3>
+                      {group.leaderId === user.uid && (
+                        <Crown className="h-4 w-4 text-yellow-500" />
+                      )}
+                    </div>
+                    <div className="flex items-center text-muted text-xs mb-1">
+                      <MapPin className="h-3 w-3 mr-1" />
+                      <span>{group.destination}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="flex items-center text-muted text-xs">
+                        <Users className="h-3 w-3 mr-1" />
+                        <span>{group.members.length} members</span>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded ${
+                        group.status === 'planning'
+                          ? 'bg-blue-500/20 text-blue-300'
+                          : group.status === 'active'
+                          ? 'bg-green-500/20 text-green-300'
+                          : 'bg-gray-500/20 text-gray-300'
+                      }`}>
+                        {group.status}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -459,62 +390,6 @@ const GroupPage: React.FC = () => {
         </div>
       )}
 
-      {/* Invite Member Modal */}
-      {showInviteModal && selectedGroup && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="glass-card p-6 w-full max-w-md">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-primary">Invite Members</h2>
-              <button
-                onClick={() => setShowInviteModal(false)}
-                className="text-muted hover:text-primary"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <p className="text-secondary text-sm">
-                Share this link with your friends to invite them to join the group:
-              </p>
-
-              <div className="glass-card p-4 flex items-center gap-3">
-                <input
-                  type="text"
-                  value={generateInviteLink(selectedGroup.id)}
-                  readOnly
-                  className="flex-1 glass-input px-3 py-2 rounded text-sm"
-                />
-                <button
-                  onClick={() => copyInviteLink(selectedGroup.id)}
-                  className="premium-button-secondary flex items-center gap-2 text-sm"
-                >
-                  {copiedInviteLink === selectedGroup.id ? (
-                    <>
-                      <Check className="h-4 w-4" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="pt-4">
-                <button
-                  onClick={() => setShowInviteModal(false)}
-                  className="w-full premium-button-primary"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Toast Notifications */}
       <div className="fixed bottom-4 right-4 z-50 space-y-2">
