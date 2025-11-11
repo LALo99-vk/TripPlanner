@@ -315,6 +315,35 @@ export function subscribeUserGroups(
 }
 
 /**
+ * Delete a group (only leader can delete)
+ */
+export async function deleteGroup(groupId: string, userId: string): Promise<void> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  // First verify user is the leader
+  const group = await getGroup(groupId);
+  if (!group) {
+    throw new Error('Group not found');
+  }
+
+  if (group.leaderId !== userId) {
+    throw new Error('Only the group leader can delete the group');
+  }
+
+  // Delete the group (cascade will handle related records)
+  const { error } = await supabase
+    .from('groups')
+    .delete()
+    .eq('id', groupId)
+    .eq('leader_id', userId);
+
+  if (error) {
+    console.error('Error deleting group:', error);
+    throw error;
+  }
+}
+
+/**
  * Helper function to map database row to Group interface
  */
 function mapGroupData(data: any): Group {

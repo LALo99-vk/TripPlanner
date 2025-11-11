@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { ArrowLeft, MapPin, Calendar, Users, Crown, UserPlus, Copy, Check, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, Users, Crown, UserPlus, Copy, Check, X, MessageCircle, Map } from 'lucide-react';
 import { getGroup, subscribeToGroup, type Group } from '../../services/groupRepository';
 import ItinerarySection from '../Group/ItinerarySection';
+import ChatSection from '../Group/ChatSection';
+import PollSection from '../Group/PollSection';
+import MapSection from '../Group/MapSection'; // Google Maps
+// import MapSection from '../Group/MapSectionMapbox'; // Mapbox (Free alternative)
 
-type GroupTab = 'itinerary' | 'members' | 'settings';
+type GroupTab = 'itinerary' | 'chat' | 'polls' | 'map' | 'members';
 
 interface GroupDetailPageProps {
   groupId: string;
@@ -126,6 +130,9 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
 
   const tabs = [
     { id: 'itinerary' as const, label: 'Itinerary Editor', icon: Calendar },
+    { id: 'chat' as const, label: 'Communication Hub', icon: MessageCircle },
+    { id: 'polls' as const, label: 'Decision Center', icon: Users },
+    { id: 'map' as const, label: 'Live Map', icon: Map },
     { id: 'members' as const, label: 'Members', icon: Users },
   ];
 
@@ -223,6 +230,27 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
           <div className="p-6">
             {activeTab === 'itinerary' && (
               <ItinerarySection
+                groupId={group.id}
+                leaderId={group.leaderId}
+              />
+            )}
+
+            {activeTab === 'chat' && (
+              <ChatSection
+                groupId={group.id}
+                leaderId={group.leaderId}
+              />
+            )}
+
+            {activeTab === 'polls' && (
+              <PollSection
+                groupId={group.id}
+                leaderId={group.leaderId}
+              />
+            )}
+
+            {activeTab === 'map' && (
+              <MapSection
                 groupId={group.id}
                 leaderId={group.leaderId}
               />

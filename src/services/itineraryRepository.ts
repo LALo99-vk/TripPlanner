@@ -176,6 +176,40 @@ export async function importPlanToGroupItinerary(
   const supabase = await getAuthenticatedSupabaseClient();
   let importedCount = 0;
 
+  // Helper to insert one activity
+  async function insertActivity(params: {
+    title: string;
+    description: string | null;
+    date: string;
+    startTime: string | null;
+    endTime: string | null;
+    orderIndex: number;
+    location: ActivityLocation | null;
+  }): Promise<boolean> {
+    const { error } = await supabase
+      .from('group_itinerary_activities')
+      .insert({
+        group_id: groupId,
+        title: params.title,
+        description: params.description,
+        date: params.date,
+        start_time: params.startTime,
+        end_time: params.endTime,
+        owner_id: userId,
+        owner_name: userName,
+        last_edited_by: userId,
+        location: params.location,
+        order_index: params.orderIndex,
+        imported_from_user: true,
+        source_plan_id: planId,
+      });
+    if (error) {
+      console.error('Error importing activity:', error);
+      return false;
+    }
+    return true;
+  }
+
   // Get group start date if not provided
   let baseDate: Date;
   if (groupStartDate) {
@@ -250,33 +284,60 @@ export async function importPlanToGroupItinerary(
         ? { name: slot.location }
         : null;
 
-      const { error } = await supabase
-        .from('group_itinerary_activities')
-        .insert({
-          group_id: groupId,
-          title: slot.name,
-          description: slot.description || null,
-          date: date,
-          start_time: startTime,
-          end_time: endTime,
-          owner_id: userId,
-          owner_name: userName,
-          last_edited_by: userId,
-          location: location,
-          order_index: i,
-          imported_from_user: true,
-          source_plan_id: planId,
-        });
-
-      if (!error) {
+      const ok = await insertActivity({
+        title: slot.name,
+        description: slot.description || null,
+        date,
+        startTime,
+        endTime,
+        orderIndex: i,
+        location,
+      });
+      if (ok) {
         importedCount++;
-      } else {
-        console.error('Error importing activity:', error);
       }
     }
   }
 
   return importedCount;
+}
+
+/**
+ * Clear all activities for a group
+ */
+export async function clearGroupActivities(groupId: string): Promise<void> {
+  const supabase = await getAuthenticatedSupabaseClient();
+  const { error } = await supabase
+    .from('group_itinerary_activities')
+    .delete()
+    .eq('group_id', groupId);
+  if (error) {
+    console.error('Error clearing group activities:', error);
+    throw error;
+  }
+}
+
+/**
+ * Replace entire group itinerary with a selected plan
+ */
+export async function replaceGroupItineraryWithPlan(
+  groupId: string,
+  userId: string,
+  userName: string,
+  plan: AiTripPlanData,
+  planId: string,
+  groupStartDate?: string
+): Promise<number> {
+  await clearGroupActivities(groupId);
+  const count = await importPlanToGroupItinerary(
+    groupId,
+    userId,
+    userName,
+    plan,
+    planId,
+    groupStartDate
+  );
+  return count;
 }
 
 /**

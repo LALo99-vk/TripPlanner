@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import AuthPage from '../Auth/AuthPage';
-import { Plus, Users, MapPin, Calendar, X, Crown } from 'lucide-react';
+import { Plus, Users, MapPin, Calendar, X, Crown, Trash2 } from 'lucide-react';
 import GroupDetailPage from './GroupDetailPage';
 import {
   createGroup,
@@ -9,6 +9,7 @@ import {
   getUserGroups,
   subscribeUserGroups,
   addMemberToGroup,
+  deleteGroup,
   type Group,
   type CreateGroupData,
 } from '../../services/groupRepository';
@@ -171,6 +172,28 @@ const GroupPage: React.FC = () => {
     window.history.pushState({}, '', '/group');
   };
 
+  const handleDeleteGroup = async (groupId: string, groupName: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    
+    if (!user) return;
+    
+    if (!confirm(`Are you sure you want to delete "${groupName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteGroup(groupId, user.uid);
+      showToast('Group deleted successfully', 'success');
+      
+      // Refresh groups list
+      const updatedGroups = await getUserGroups(user.uid);
+      setGroups(updatedGroups);
+    } catch (error: any) {
+      console.error('Error deleting group:', error);
+      showToast(error.message || 'Failed to delete group. Only the leader can delete.', 'error');
+    }
+  };
+
   // Show loading spinner while checking authentication
   if (loading) {
     return (
@@ -241,13 +264,24 @@ const GroupPage: React.FC = () => {
                       setSelectedGroupId(group.id);
                       window.history.pushState({}, '', `/group/${group.id}`);
                     }}
-                    className="glass-card p-4 cursor-pointer transition-all hover:bg-white/10"
+                    className="glass-card p-4 cursor-pointer transition-all hover:bg-white/10 relative"
                   >
                     <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-semibold text-primary text-sm">{group.groupName}</h3>
-                      {group.leaderId === user.uid && (
-                        <Crown className="h-4 w-4 text-yellow-500" />
-                      )}
+                      <h3 className="font-semibold text-primary text-sm flex-1">{group.groupName}</h3>
+                      <div className="flex items-center gap-2">
+                        {group.leaderId === user.uid && (
+                          <Crown className="h-4 w-4 text-yellow-500" />
+                        )}
+                        {group.leaderId === user.uid && (
+                          <button
+                            onClick={(e) => handleDeleteGroup(group.id, group.groupName, e)}
+                            className="text-muted hover:text-red-400 transition-colors p-1"
+                            title="Delete group"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center text-muted text-xs mb-1">
                       <MapPin className="h-3 w-3 mr-1" />

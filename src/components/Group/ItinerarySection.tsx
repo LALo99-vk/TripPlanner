@@ -8,6 +8,7 @@ import {
   deleteActivity,
   subscribeGroupItinerary,
   importPlanToGroupItinerary,
+  replaceGroupItineraryWithPlan,
   CreateActivityData,
   UpdateActivityData,
 } from '../../services/itineraryRepository';
@@ -30,6 +31,7 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [replaceMode, setReplaceMode] = useState(false);
   const [editingActivity, setEditingActivity] = useState<GroupItineraryActivity | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -100,16 +102,30 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
       // Get group start date for date calculation
       const { getGroup } = await import('../../services/groupRepository');
       const group = await getGroup(groupId);
-      
-      const count = await importPlanToGroupItinerary(
-        groupId,
-        user.uid,
-        user.displayName || 'User',
-        plan.plan,
-        plan.id,
-        group?.startDate
-      );
-      showToastMessage(`Plan imported to group itinerary! ${count} activities added.`);
+
+      let count = 0;
+      if (replaceMode) {
+        count = await replaceGroupItineraryWithPlan(
+          groupId,
+          user.uid,
+          user.displayName || 'User',
+          plan.plan,
+          plan.id,
+          group?.startDate
+        );
+        showToastMessage(`Itinerary replaced with "${plan.name}". ${count} activities added.`);
+      } else {
+        count = await importPlanToGroupItinerary(
+          groupId,
+          user.uid,
+          user.displayName || 'User',
+          plan.plan,
+          plan.id,
+          group?.startDate
+        );
+        showToastMessage(`Plan imported to group itinerary! ${count} activities added.`);
+      }
+      setReplaceMode(false);
     } catch (error) {
       console.error('Error importing plan:', error);
       showToastMessage('Failed to import plan. Please try again.', 'error');
@@ -141,6 +157,17 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
           >
             <FolderOpen className="h-4 w-4" />
             Import Trip Itineraries
+          </button>
+          <button
+            onClick={() => {
+              setReplaceMode(true);
+              setShowImportModal(true);
+            }}
+            className="premium-button-secondary flex items-center gap-2 text-sm"
+            title="Replace entire itinerary with a saved plan"
+          >
+            <FolderOpen className="h-4 w-4" />
+            Replace Itinerary
           </button>
           <button
             onClick={() => setShowAddModal(true)}
