@@ -13,9 +13,11 @@ import {
   UpdateActivityData,
 } from '../../services/itineraryRepository';
 import { SavedPlanRecord } from '../../services/planRepository';
+import { getApprovalStatus, subscribeToApprovalStatus, type ApprovalStatus } from '../../services/planApprovalRepository';
 import ActivityCard from './ActivityCard';
 import AddActivityModal from './AddActivityModal';
 import ImportFromPlansModal from './ImportFromPlansModal';
+import PlanApprovalSection from './PlanApprovalSection';
 
 interface ItinerarySectionProps {
   groupId: string;
@@ -34,8 +36,10 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
   const [replaceMode, setReplaceMode] = useState(false);
   const [editingActivity, setEditingActivity] = useState<GroupItineraryActivity | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null);
 
   const isLeader = user?.uid === leaderId;
+  const isPlanFixed = approvalStatus?.isFixed || false;
 
   // Subscribe to real-time updates
   useEffect(() => {
@@ -51,6 +55,19 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
     };
   }, [groupId]);
 
+  // Subscribe to approval status
+  useEffect(() => {
+    if (!groupId) return;
+
+    const unsubscribe = subscribeToApprovalStatus(groupId, (status) => {
+      setApprovalStatus(status);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [groupId]);
+
   const showToastMessage = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -58,6 +75,11 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
 
   const handleCreateActivity = async (data: CreateActivityData) => {
     if (!user) return;
+
+    if (isPlanFixed && !isLeader) {
+      showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
+      return;
+    }
 
     try {
       await createActivity(groupId, user.uid, user.displayName || 'User', data);
@@ -72,6 +94,12 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
   const handleUpdateActivity = async (data: UpdateActivityData) => {
     if (!user || !editingActivity) return;
 
+    if (isPlanFixed && !isLeader) {
+      showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
+      setEditingActivity(null);
+      return;
+    }
+
     try {
       await updateActivity(editingActivity.id, user.uid, data);
       showToastMessage('Activity updated successfully!');
@@ -84,6 +112,11 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
   };
 
   const handleDeleteActivity = async (activityId: string) => {
+    if (isPlanFixed && !isLeader) {
+      showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
+      return;
+    }
+
     if (!confirm('Are you sure you want to delete this activity?')) return;
 
     try {
@@ -147,35 +180,49 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
 
   return (
     <div className="mt-6">
+      {/* Plan Approval Section */}
+      <PlanApprovalSection groupId={groupId} leaderId={leaderId} />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-primary">Group Itinerary</h2>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="premium-button-secondary flex items-center gap-2 text-sm"
-          >
-            <FolderOpen className="h-4 w-4" />
-            Import Trip Itineraries
-          </button>
-          <button
-            onClick={() => {
-              setReplaceMode(true);
-              setShowImportModal(true);
-            }}
-            className="premium-button-secondary flex items-center gap-2 text-sm"
-            title="Replace entire itinerary with a saved plan"
-          >
-            <FolderOpen className="h-4 w-4" />
-            Replace Itinerary
-          </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="premium-button-primary flex items-center gap-2 text-sm"
-          >
-            <Plus className="h-4 w-4" />
-            Add Activity
-          </button>
+          {!isPlanFixed || isLeader ? (
+            <>
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="premium-button-secondary flex items-center gap-2 text-sm"
+                disabled={isPlanFixed && !isLeader}
+              >
+                <FolderOpen className="h-4 w-4" />
+                Import Trip Itineraries
+              </button>
+              <button
+                onClick={() => {
+                  setReplaceMode(true);
+                  setShowImportModal(true);
+                }}
+                className="premium-button-secondary flex items-center gap-2 text-sm"
+                title="Replace entire itinerary with a saved plan"
+                disabled={isPlanFixed && !isLeader}
+              >
+                <FolderOpen className="h-4 w-4" />
+                Replace Itinerary
+              </button>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="premium-button-primary flex items-center gap-2 text-sm"
+                disabled={isPlanFixed && !isLeader}
+              >
+                <Plus className="h-4 w-4" />
+                Add Activity
+              </button>
+            </>
+          ) : (
+            <div className="text-sm text-secondary">
+              Plan is locked. Only the leader can make changes.
+            </div>
+          )}
         </div>
       </div>
 
@@ -231,8 +278,15 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
                     activity={activity}
                     currentUserId={user?.uid || ''}
                     isLeader={isLeader}
-                    onEdit={() => setEditingActivity(activity)}
+                    onEdit={() => {
+                      if (isPlanFixed && !isLeader) {
+                        showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
+                        return;
+                      }
+                      setEditingActivity(activity);
+                    }}
                     onDelete={() => handleDeleteActivity(activity.id)}
+                    canEdit={!isPlanFixed || isLeader}
                   />
                 ))}
               </div>

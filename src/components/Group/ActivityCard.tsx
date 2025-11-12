@@ -8,6 +8,7 @@ interface ActivityCardProps {
   isLeader: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  canEdit?: boolean;
 }
 
 const ActivityCard: React.FC<ActivityCardProps> = ({
@@ -16,9 +17,11 @@ const ActivityCard: React.FC<ActivityCardProps> = ({
   isLeader,
   onEdit,
   onDelete,
+  canEdit: canEditProp,
 }) => {
   // Access control: Leaders can edit all, members can edit imported activities or their own
-  const canEdit = isLeader || activity.ownerId === currentUserId || activity.importedFromUser;
+  // But respect the canEdit prop if provided (for plan locking)
+  const canEdit = canEditProp !== undefined ? canEditProp : (isLeader || activity.ownerId === currentUserId || activity.importedFromUser);
   const isImported = activity.importedFromUser;
 
   const formatTime = (time: string | null) => {

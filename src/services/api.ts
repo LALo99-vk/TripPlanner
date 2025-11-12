@@ -197,6 +197,15 @@ class ApiService {
     totalBudget: number;
     destination: string;
     duration: number;
+    groupId?: string;
+    groupName?: string;
+    memberSummary?: Array<{
+      userId: string;
+      userName: string;
+      totalPaid: number;
+      totalOwed: number;
+      balance: number;
+    }>;
   }): Promise<BudgetAnalysisResponse> {
     return this.makeRequest<BudgetAnalysisResponse>('/ai/budget-analysis', {
       method: 'POST',
