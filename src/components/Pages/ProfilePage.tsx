@@ -10,6 +10,7 @@ interface UserProfile {
   displayName: string;
   photoURL: string;
   bio: string;
+  homeLocation: string;
   followersCount: number;
   followingCount: number;
   tripsCount: number;
@@ -35,6 +36,7 @@ const ProfilePage: React.FC = () => {
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
+  const [editHomeLocation, setEditHomeLocation] = useState('');
   const [editPhoto, setEditPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -63,15 +65,18 @@ const ProfilePage: React.FC = () => {
             displayName: data.display_name || '',
             photoURL: data.photo_url || '',
             bio: data.bio || '',
+            homeLocation: data.home_location || '',
             followersCount: data.followers_count || 0,
             followingCount: data.following_count || 0,
             tripsCount: data.trips_count || 0,
           };
           setProfile(profileData);
           setEditName(profileData.displayName || user?.displayName || '');
+          setEditHomeLocation(profileData.homeLocation || '');
         } else {
           // If no profile exists, initialize with Firebase user data
           setEditName(user?.displayName || '');
+          setEditHomeLocation('');
         }
       } catch (error) {
         console.error('Error loading profile:', error);
@@ -231,6 +236,7 @@ const ProfilePage: React.FC = () => {
           display_name: editName.trim() || user.displayName || 'User',
           photo_url: photoURL,
           email: user.email,
+          home_location: editHomeLocation.trim() || null,
           updated_at: new Date().toISOString(),
         }, {
           onConflict: 'id',
@@ -273,6 +279,7 @@ const ProfilePage: React.FC = () => {
           displayName: updatedData.display_name || '',
           photoURL: updatedData.photo_url || '',
           bio: updatedData.bio || '',
+          homeLocation: updatedData.home_location || '',
           followersCount: updatedData.followers_count || 0,
           followingCount: updatedData.following_count || 0,
           tripsCount: updatedData.trips_count || 0,
@@ -283,6 +290,7 @@ const ProfilePage: React.FC = () => {
           ...prev!,
           displayName: editName.trim() || user.displayName || 'User',
           photoURL: photoURL,
+          homeLocation: editHomeLocation.trim() || '',
         }));
       }
 
@@ -376,6 +384,23 @@ const ProfilePage: React.FC = () => {
                       className="glass-input w-full px-4 py-2 rounded-lg text-primary focus:ring-2 focus:ring-white/30 focus:border-white/30"
                       maxLength={50}
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-primary mb-2 flex items-center gap-2">
+                      <MapPin className="h-4 w-4" />
+                      Home Location
+                    </label>
+                    <input
+                      type="text"
+                      value={editHomeLocation}
+                      onChange={(e) => setEditHomeLocation(e.target.value)}
+                      placeholder="Enter your home city (e.g., Mumbai, Delhi)"
+                      className="glass-input w-full px-4 py-2 rounded-lg text-primary focus:ring-2 focus:ring-white/30 focus:border-white/30"
+                      maxLength={100}
+                    />
+                    <p className="text-xs text-secondary mt-1">
+                      This helps us suggest the best travel options for your trips
+                    </p>
                   </div>
                   <div className="flex space-x-3">
                     <button

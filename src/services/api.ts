@@ -217,7 +217,7 @@ class ApiService {
     from: string;
     to: string;
     date: string;
-    type: 'flight' | 'train' | 'hotel';
+    type: 'flight' | 'train' | 'bus' | 'hotel';
     preferences: string;
   }): Promise<BookingRecommendationsResponse> {
     return this.makeRequest<BookingRecommendationsResponse>('/ai/booking-recommendations', {
@@ -228,6 +228,20 @@ class ApiService {
 
   async getEmergencyContacts(params: { destination: string; stateOrCountry?: string }): Promise<{ success: boolean; data: EmergencyContactsData; timestamp: string }> {
     return this.makeRequest('/ai/emergency-contacts', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async suggestTransportMode(params: {
+    originCity: string;
+    destinationCity: string;
+    date: string;
+    dayNumber: number;
+    previousCity?: string;
+    distanceKm?: number;
+  }): Promise<{ success: boolean; data: { suggestedTransport: 'flight' | 'train' | 'bus'; reasoning: string }; timestamp: string }> {
+    return this.makeRequest('/ai/suggest-transport', {
       method: 'POST',
       body: JSON.stringify(params),
     });

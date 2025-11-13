@@ -388,3 +388,40 @@ CREATE POLICY "Allow authenticated user operations on finalized plans"
 CREATE TRIGGER update_finalized_plans_updated_at BEFORE UPDATE ON group_finalized_plans
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Group booking selections (stores chosen travel/stay options per day)
+CREATE TABLE IF NOT EXISTS group_bookings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  day_number INTEGER NOT NULL,
+  booking_type TEXT NOT NULL CHECK (booking_type IN ('flight', 'train', 'bus', 'hotel')),
+  selected_option JSONB NOT NULL,
+  selected_by TEXT,
+  selected_by_name TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(group_id, day_number, booking_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_bookings_group_id ON group_bookings(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_bookings_day ON group_bookings(group_id, day_number);
+
+ALTER TABLE group_bookings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "group members manage bookings"
+  ON group_bookings
+  FOR ALL
+  USING (
+    auth.uid()::TEXT IN (
+      SELECT user_id FROM group_members WHERE group_id = group_bookings.group_id
+    )
+  )
+  WITH CHECK (
+    auth.uid()::TEXT IN (
+      SELECT user_id FROM group_members WHERE group_id = group_bookings.group_id
+    )
+  );
+
+DROP TRIGGER IF EXISTS update_group_bookings_updated_at ON group_bookings;
+CREATE TRIGGER update_group_bookings_updated_at BEFORE UPDATE ON group_bookings
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

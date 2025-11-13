@@ -1,6 +1,6 @@
 import { getAuthenticatedSupabaseClient } from '../config/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { AiTripPlanData, AiPlanDay, AiPlanSlotItem } from './api';
+import { AiTripPlanData, AiPlanDay, AiPlanSlotItem, apiService } from './api';
 
 export interface ActivityLocation {
   name?: string;
@@ -26,6 +26,11 @@ export interface GroupItineraryActivity {
   sourcePlanId: string | null;
   createdAt: string;
   updatedAt: string;
+  // Transport suggestion fields
+  suggestedTransport?: 'flight' | 'train' | 'bus' | null;
+  originCity?: string | null;
+  destinationCity?: string | null;
+  travelDate?: string | null;
 }
 
 export interface CreateActivityData {
@@ -176,6 +181,73 @@ export async function importPlanToGroupItinerary(
   const supabase = await getAuthenticatedSupabaseClient();
   let importedCount = 0;
 
+  // Helper to extract city name from location string
+  function extractCityName(location: string | undefined): string | null {
+    if (!location) return null;
+    // Remove common descriptive words and extract city name
+    const cleaned = location
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .replace(/\b(visit|temple|hill|view|enjoy|panoramic|city|climb|up|the|and|near|to|from|go|see|place|spot|station|airport|bus|train|hotel)\b/gi, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(word => word.length > 2)
+      .slice(0, 2)
+      .join(' ');
+    return cleaned || null;
+  }
+
+  // Helper to detect if a slot involves travel between cities
+  function isTravelSegment(
+    slot: AiPlanSlotItem,
+    previousLocation: string | null,
+    currentLocation: string | null
+  ): { isTravel: boolean; originCity: string | null; destinationCity: string | null } {
+    // Check if slot has significant travel distance
+    if (slot.travelDistanceKm && slot.travelDistanceKm > 10) {
+      const origin = previousLocation ? extractCityName(previousLocation) : null;
+      const dest = currentLocation ? extractCityName(currentLocation) : null;
+      if (origin && dest && origin !== dest) {
+        return { isTravel: true, originCity: origin, destinationCity: dest };
+      }
+    }
+    
+    // Check if location changed significantly
+    if (previousLocation && currentLocation) {
+      const prevCity = extractCityName(previousLocation);
+      const currCity = extractCityName(currentLocation);
+      if (prevCity && currCity && prevCity !== currCity) {
+        return { isTravel: true, originCity: prevCity, destinationCity: currCity };
+      }
+    }
+    
+    return { isTravel: false, originCity: null, destinationCity: null };
+  }
+
+  // Helper to get AI transport suggestion
+  async function getTransportSuggestion(
+    originCity: string,
+    destinationCity: string,
+    date: string,
+    dayNumber: number,
+    previousCity?: string,
+    distanceKm?: number
+  ): Promise<'flight' | 'train' | 'bus' | null> {
+    try {
+      const response = await apiService.suggestTransportMode({
+        originCity,
+        destinationCity,
+        date,
+        dayNumber,
+        previousCity,
+        distanceKm,
+      });
+      return response.data?.suggestedTransport || null;
+    } catch (error) {
+      console.error('Error getting transport suggestion:', error);
+      return null; // Fail silently, don't block import
+    }
+  }
+
   // Helper to insert one activity
   async function insertActivity(params: {
     title: string;
@@ -185,6 +257,10 @@ export async function importPlanToGroupItinerary(
     endTime: string | null;
     orderIndex: number;
     location: ActivityLocation | null;
+    suggestedTransport?: 'flight' | 'train' | 'bus' | null;
+    originCity?: string | null;
+    destinationCity?: string | null;
+    travelDate?: string | null;
   }): Promise<boolean> {
     const { error } = await supabase
       .from('group_itinerary_activities')
@@ -202,6 +278,10 @@ export async function importPlanToGroupItinerary(
         order_index: params.orderIndex,
         imported_from_user: true,
         source_plan_id: planId,
+        suggested_transport: params.suggestedTransport || null,
+        origin_city: params.originCity || null,
+        destination_city: params.destinationCity || null,
+        travel_date: params.travelDate || null,
       });
     if (error) {
       console.error('Error importing activity:', error);
@@ -271,6 +351,11 @@ export async function importPlanToGroupItinerary(
       return timeA.localeCompare(timeB);
     });
 
+    // Track previous location for travel detection
+    let previousLocation: string | null = dayIndex > 0 && plan.days[dayIndex - 1]?.slots?.evening?.[0]?.location
+      ? plan.days[dayIndex - 1].slots.evening[0].location
+      : null;
+
     // Create activities for each slot
     for (let i = 0; i < allSlots.length; i++) {
       const { slot } = allSlots[i];
@@ -280,9 +365,30 @@ export async function importPlanToGroupItinerary(
       const [startTime, endTime] = parseTimeRange(timeStr, slot.duration);
 
       // Extract location if available
-      const location: ActivityLocation | null = slot.location
-        ? { name: slot.location }
+      const currentLocation = slot.location || null;
+      const location: ActivityLocation | null = currentLocation
+        ? { name: currentLocation }
         : null;
+
+      // Detect if this is a travel segment
+      const travelInfo = isTravelSegment(slot, previousLocation, currentLocation);
+      let suggestedTransport: 'flight' | 'train' | 'bus' | null = null;
+      let originCity: string | null = null;
+      let destinationCity: string | null = null;
+
+      if (travelInfo.isTravel && travelInfo.originCity && travelInfo.destinationCity) {
+        // Get AI transport suggestion for this travel segment
+        originCity = travelInfo.originCity;
+        destinationCity = travelInfo.destinationCity;
+        suggestedTransport = await getTransportSuggestion(
+          originCity,
+          destinationCity,
+          date,
+          day.day,
+          previousLocation ? extractCityName(previousLocation) : undefined,
+          slot.travelDistanceKm
+        );
+      }
 
       const ok = await insertActivity({
         title: slot.name,
@@ -292,9 +398,18 @@ export async function importPlanToGroupItinerary(
         endTime,
         orderIndex: i,
         location,
+        suggestedTransport,
+        originCity,
+        destinationCity,
+        travelDate: travelInfo.isTravel ? date : null,
       });
       if (ok) {
         importedCount++;
+      }
+
+      // Update previous location for next iteration
+      if (currentLocation) {
+        previousLocation = currentLocation;
       }
     }
   }
@@ -445,6 +560,11 @@ function mapActivityData(data: any): GroupItineraryActivity {
     sourcePlanId: data.source_plan_id,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
+    // Transport suggestion fields
+    suggestedTransport: data.suggested_transport || null,
+    originCity: data.origin_city || null,
+    destinationCity: data.destination_city || null,
+    travelDate: data.travel_date || null,
   };
 }
 
