@@ -81,6 +81,7 @@ const flightCache = new Map<string, CacheEntry<FlightOption[]>>();
 const trainCache = new Map<string, CacheEntry<TrainOption[]>>();
 const busCache = new Map<string, CacheEntry<BusOption[]>>();
 const hotelCache = new Map<string, CacheEntry<HotelOption[]>>();
+const stationCache = new Map<string, CacheEntry<string | null>>(); // Cache for train station codes
 const rateLimitCooldowns = new Map<string, number>();
 
 // Global rate limiter - tracks last API call time
@@ -217,7 +218,7 @@ async function fetchWithTimeout(
   resource: RequestInfo,
   options: RequestInit = {},
   timeout = 15000,
-  retries = 2
+  retries = 0 // Disable retries for 429 errors - they make things worse
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -225,14 +226,8 @@ async function fetchWithTimeout(
   try {
     const response = await fetch(resource, { ...options, signal: controller.signal });
     
-    // Retry on 429 with exponential backoff
-    if (response.status === 429 && retries > 0) {
-      clearTimeout(timeoutId);
-      const wait = Math.pow(2, 3 - retries) * 2000; // 2s → 4s
-      console.warn(`429 Too Many Requests — retrying in ${wait / 1000}s`);
-      await new Promise(resolve => setTimeout(resolve, wait));
-      return fetchWithTimeout(resource, options, timeout, retries - 1);
-    }
+    // Don't retry on 429 - just return the response and let caller handle it
+    // Retrying immediately makes rate limiting worse
     
     clearTimeout(timeoutId);
     return response;
@@ -579,6 +574,33 @@ async function resolveTrainStation(city: string): Promise<string | null> {
   // Clean location name first
   const cleaned = cleanLocationName(city);
   const searchTerm = cleaned || city;
+  const cacheKey = `station:${searchTerm.toLowerCase()}`;
+
+  // Check cache first
+  const cached = getCachedValue(stationCache, cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Check localStorage cache
+  const storageCached = getCachedResultFromStorage<string | null>(cacheKey, LOCATION_CACHE_TTL_MS);
+  if (storageCached !== null) {
+    setCachedValue(stationCache, cacheKey, storageCached, LOCATION_CACHE_TTL_MS);
+    return storageCached;
+  }
+
+  // Check rate limit before making API call
+  const rateLimitKey = 'irctc-station';
+  if (isRateLimited(rateLimitKey)) {
+    // Don't log warning for every call - only log once
+    // Return null gracefully and let caller handle it
+    return null;
+  }
+
+  // Rate limit this call
+  await rateLimitedApiCall(async () => {
+    // This will add delay if needed
+  });
 
   const params = new URLSearchParams({
     search: searchTerm,
@@ -595,21 +617,41 @@ async function resolveTrainStation(city: string): Promise<string | null> {
   );
 
   if (!response.ok) {
+    if (response.status === 429) {
+      setRateLimit(rateLimitKey);
+      // Don't cache null for rate limits - allow retry after cooldown
+      // Only cache for a short time to prevent immediate retries
+      setCachedValue(stationCache, cacheKey, null, 60000); // 1 minute cache for rate limits
+      console.warn(`IRCTC station lookup rate-limited for ${searchTerm}. Will retry after cooldown.`);
+      return null;
+    }
+    // For other errors (400, 404, etc.), cache null for longer
+    // This indicates the station might not exist or city name is invalid
+    setCachedValue(stationCache, cacheKey, null, LOCATION_CACHE_TTL_MS);
+    cacheResultToStorage(cacheKey, null);
     return null;
   }
 
   const json = await response.json();
   const { data } = json;
   if (!Array.isArray(data) || data.length === 0) {
+    setCachedValue(stationCache, cacheKey, null, LOCATION_CACHE_TTL_MS);
+    cacheResultToStorage(cacheKey, null);
     return null;
   }
 
   const parsed = IRCTCStationSchema.safeParse(data[0]);
   if (!parsed.success) {
+    setCachedValue(stationCache, cacheKey, null, LOCATION_CACHE_TTL_MS);
+    cacheResultToStorage(cacheKey, null);
     return null;
   }
 
-  return parsed.data.stationCode;
+  const stationCode = parsed.data.stationCode;
+  // Cache successful result
+  setCachedValue(stationCache, cacheKey, stationCode, LOCATION_CACHE_TTL_MS);
+  cacheResultToStorage(cacheKey, stationCode);
+  return stationCode;
 }
 
 const IRCTCTrainSchema = z.object({
@@ -658,14 +700,33 @@ export async function searchTrains(params: {
   const [originCode, destinationCode] = await rateLimitedApiCall(async () => {
     // Resolve origin first
     const orig = await resolveTrainStation(fromCity);
-    // Wait before resolving destination
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Wait before resolving destination (longer delay to avoid rate limits)
+    await new Promise(resolve => setTimeout(resolve, 4000));
     const dest = await resolveTrainStation(toCity);
     return [orig, dest];
   });
 
   if (!originCode || !destinationCode) {
-    console.warn(`Unable to find train stations for ${fromCity} → ${toCity}. Station lookup may have failed.`);
+    // Check if it's a rate limit issue
+    const rateLimitKey = 'irctc-station';
+    if (isRateLimited(rateLimitKey)) {
+      // Don't log - error will be shown to user in UI
+      return []; // Return empty array - user can retry later
+    }
+    
+    // Only log if it's not rate-limited (actual error)
+    // Check which station failed for better debugging
+    if (!originCode && !destinationCode) {
+      // Both failed - likely rate limit or invalid cities
+      // Don't log - will be handled by UI error messages
+    } else if (!originCode) {
+      // Origin station not found
+      console.debug(`Train station not found for origin: ${fromCity}`);
+    } else if (!destinationCode) {
+      // Destination station not found
+      console.debug(`Train station not found for destination: ${toCity}`);
+    }
+    
     return []; // Return empty array instead of throwing
   }
 
@@ -693,6 +754,7 @@ export async function searchTrains(params: {
     if (!response.ok) {
       if (response.status === 429) {
         setRateLimit('irctc-train');
+        setRateLimit('irctc-station'); // Also set station rate limit since they share the same API
         console.warn('IRCTC train search rate-limited. Will retry after cooldown.');
         return []; // Return empty array instead of throwing
       }

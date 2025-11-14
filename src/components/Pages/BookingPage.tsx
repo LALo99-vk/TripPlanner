@@ -1194,6 +1194,7 @@ const categoryLabels: Record<TravelCategory, string> = {
       }
 
       // Fallback to itinerary data if manual form doesn't have required fields
+      // Prefer stored origin/destination cities from AI suggestions if available
       if (!normalizedFrom || !normalizedTo) {
         const fallbackDestination =
           normalizeCityName(selectedPlan?.destination, undefined) ??
@@ -1202,41 +1203,30 @@ const categoryLabels: Record<TravelCategory, string> = {
           selectedGroup?.destination ??
           undefined;
 
+        // Use stored origin/destination cities from activities (from AI suggestions) if available
+        const storedFrom = day.originCity || day.from;
+        const storedTo = day.destinationCity || day.to;
+        const storedDate = day.travelDate || day.date;
+
         if (!normalizedFrom) {
-          normalizedFrom = normalizeCityName(day.from, fallbackDestination);
+          normalizedFrom = normalizeCityName(storedFrom, fallbackDestination);
         }
         if (!normalizedTo) {
-          normalizedTo = normalizeCityName(day.to ?? day.location, fallbackDestination);
+          normalizedTo = normalizeCityName(storedTo ?? day.location, fallbackDestination);
         }
         if (!normalizedHotelCity) {
           normalizedHotelCity = normalizeCityName(
-            day.location ?? day.to,
+            day.location ?? storedTo ?? day.to,
             normalizedTo ?? fallbackDestination
           );
         }
         if (!searchDate) {
-          searchDate = day.date ?? selectedPlan?.startDate ?? undefined;
+          searchDate = storedDate ?? day.date ?? selectedPlan?.startDate ?? undefined;
         }
       }
 
-      if (
-        isTravelCategory &&
-        !day.transportHints.includes(category) &&
-        !manualForm
-      ) {
-        setDayErrors((prev) => ({
-          ...prev,
-          [stateKey]: `No travel plan for this mode on Day ${day.dayNumber}. Use manual search to find options.`,
-        }));
-        setDayResults((prev) => ({
-          ...prev,
-          [day.dayNumber]: {
-            ...(prev[day.dayNumber] ?? {}),
-            [category]: [],
-          },
-        }));
-        return;
-      }
+      // Don't block any category - allow users to manually search for any transport mode
+      // Auto-fetch only happens for AI-suggested categories, but manual clicks should always work
 
       if (isTravelCategory && (!normalizedFrom || !normalizedTo)) {
         setDayErrors((prev) => ({
@@ -1329,17 +1319,56 @@ const categoryLabels: Record<TravelCategory, string> = {
                               category === 'trains' ? 'irctc-train' : 
                               category === 'buses' ? 'redbus' : '';
           
+          // Also check for station rate limit (for trains)
+          const stationRateLimited = category === 'trains' && checkRateLimit('irctc-station');
+          
           if (rateLimitKey && checkRateLimit(rateLimitKey)) {
             setDayErrors((prev) => ({
               ...prev,
               [stateKey]: `${categoryLabels[category]} search is temporarily rate-limited. Please wait 2 minutes and try again, or use manual search with different cities.`,
             }));
-          } else {
+          } else if (stationRateLimited) {
             setDayErrors((prev) => ({
               ...prev,
-              [stateKey]: `No ${categoryLabels[category]} found for this route. Try using manual search with different city names or check back later.`,
+              [stateKey]: `Train station lookup is rate-limited. Please wait 2 minutes and try again, or use manual search with different station names.`,
             }));
+          } else {
+            // Clear error if we have manual form data (user is trying manual search)
+            const formKey = `${day.dayNumber}-${category}`;
+            const manualForm = manualSearchForms[formKey];
+            if (manualForm && (manualForm.from || manualForm.to || manualForm.city)) {
+              // User is using manual search - show helpful message
+              if (category === 'trains') {
+                setDayErrors((prev) => ({
+                  ...prev,
+                  [stateKey]: `No train stations found for "${manualForm.from}" → "${manualForm.to}". Please check station/city names and try again, or wait if rate-limited.`,
+                }));
+              } else {
+                setDayErrors((prev) => ({
+                  ...prev,
+                  [stateKey]: `No ${categoryLabels[category]} found for "${manualForm.from || manualForm.city}" → "${manualForm.to || manualForm.city}". Try different city names or check back later.`,
+                }));
+              }
+            } else {
+              if (category === 'trains') {
+                setDayErrors((prev) => ({
+                  ...prev,
+                  [stateKey]: `No train stations found for this route. Station lookup may have failed or city names need to be updated. Use manual search below to try different station/city names.`,
+                }));
+              } else {
+                setDayErrors((prev) => ({
+                  ...prev,
+                  [stateKey]: `No ${categoryLabels[category]} found for this route. Use manual search below to try different city names.`,
+                }));
+              }
+            }
           }
+        } else {
+          // Clear error if we have results
+          setDayErrors((prev) => ({
+            ...prev,
+            [stateKey]: null,
+          }));
         }
       } catch (error) {
         console.error('Error fetching live booking data:', error);
@@ -1397,24 +1426,44 @@ const categoryLabels: Record<TravelCategory, string> = {
       // Validate form data
       if (category === 'flights' || category === 'trains' || category === 'buses') {
         if (!form.from || !form.to || !form.date) {
+          const stateKey = `${day.dayNumber}-${category}`;
           setDayErrors((prev) => ({
             ...prev,
-            [`${day.dayNumber}-${category}`]: 'Please fill all required fields (From, To, Date).',
+            [stateKey]: 'Please fill all required fields (From, To, Date).',
           }));
           return;
         }
       } else if (category === 'hotels') {
         if (!form.city || !form.checkin || !form.checkout) {
+          const stateKey = `${day.dayNumber}-${category}`;
           setDayErrors((prev) => ({
             ...prev,
-            [`${day.dayNumber}-${category}`]: 'Please fill all required fields (City, Check-in, Check-out).',
+            [stateKey]: 'Please fill all required fields (City, Check-in, Check-out).',
           }));
           return;
         }
       }
 
-      // Fetch results using manual form data
-      await fetchCategoryResults(selectedDayIndex, category, true);
+      // Clear any previous errors
+      const stateKey = `${day.dayNumber}-${category}`;
+      setDayErrors((prev) => ({
+        ...prev,
+        [stateKey]: null,
+      }));
+
+      // Set loading state
+      setDayLoading((prev) => ({
+        ...prev,
+        [stateKey]: true,
+      }));
+
+      // Fetch results using manual form data (force = true to override cache)
+      try {
+        await fetchCategoryResults(selectedDayIndex, category, true);
+      } catch (error) {
+        console.error('Error in manual search:', error);
+        // Error is already handled in fetchCategoryResults
+      }
     },
     [selectedDayIndex, manualSearchForms, daySections, fetchCategoryResults]
   );
@@ -1514,108 +1563,69 @@ const categoryLabels: Record<TravelCategory, string> = {
     fetchHomeLocation();
   }, [user]);
 
-  // Auto-fetch all transport modes for Day 1 and Last Day
+  // Auto-fetch AI-suggested transport modes for all days
   useEffect(() => {
     if (daySections.length === 0) return;
 
-    const firstDay = daySections[0];
-    const lastDay = daySections[daySections.length - 1];
+    // Wait 2 seconds after page load to avoid overwhelming APIs
+    const timeoutId = setTimeout(async () => {
+      // Process each day section
+      for (let dayIndex = 0; dayIndex < daySections.length; dayIndex++) {
+        const day = daySections[dayIndex];
+        if (!day) continue;
 
-    if (!firstDay || !lastDay) return;
+        // Check if AI suggested a transport mode
+        const suggestedTransport = day.suggestedTransport;
+        if (!suggestedTransport) continue;
 
-    // Auto-fetch Day 1 (first trip: home → destination)
-    const fetchDay1 = async () => {
-      const categories: TravelCategory[] = ['flights', 'trains', 'buses'];
-      for (let i = 0; i < categories.length; i++) {
-        const category = categories[i];
-        const stateKey = `${firstDay.dayNumber}-${category}`;
-        const existing = dayResults[firstDay.dayNumber]?.[category];
+        // Map AI suggestion to category
+        let category: TravelCategory | null = null;
+        if (suggestedTransport === 'flight') {
+          category = 'flights';
+        } else if (suggestedTransport === 'train') {
+          category = 'trains';
+        } else if (suggestedTransport === 'bus') {
+          category = 'buses';
+        }
+
+        if (!category) continue;
+
+        // Check if results already exist
+        const stateKey = `${day.dayNumber}-${category}`;
+        const existing = dayResults[day.dayNumber]?.[category];
         if (existing && existing.length > 0) continue;
         if (dayLoading[stateKey]) continue;
 
-        // Add delay between each category fetch (3 seconds)
-        if (i > 0) {
+        // Check if we have required data (from, to, date) for travel categories
+        // Use stored origin/destination cities from activities if available (from AI suggestions)
+        const fromCity = day.originCity || day.from;
+        const toCity = day.destinationCity || day.to;
+        const travelDate = day.travelDate || day.date;
+        
+        if (category === 'flights' || category === 'trains' || category === 'buses') {
+          if (!fromCity || !toCity || !travelDate) {
+            console.warn(`Day ${day.dayNumber}: Missing from/to/date for ${category} search. from: ${fromCity}, to: ${toCity}, date: ${travelDate}`);
+            continue;
+          }
+        }
+
+        // Add delay between fetches (3 seconds per day)
+        if (dayIndex > 0) {
           await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
         try {
-          await fetchCategoryResults(0, category, false);
+          console.log(`Auto-fetching ${category} for Day ${day.dayNumber} (AI suggested: ${suggestedTransport})`);
+          await fetchCategoryResults(dayIndex, category, false);
         } catch (error) {
-          console.error(`Failed to auto-fetch ${category} for Day 1:`, error);
-          // Continue to next category even if one fails
+          console.error(`Failed to auto-fetch ${category} for Day ${day.dayNumber}:`, error);
+          // Continue to next day even if one fails
         }
       }
-    };
-
-    // Auto-fetch Last Day (return trip: destination → home)
-    const fetchLastDay = async () => {
-      // Wait 5 seconds after Day 1 fetches complete
-      await new Promise(resolve => setTimeout(resolve, 5000));
-
-      const categories: TravelCategory[] = ['flights', 'trains', 'buses'];
-      const lastDayIndex = daySections.length - 1;
-      for (let i = 0; i < categories.length; i++) {
-        const category = categories[i];
-        const stateKey = `${lastDay.dayNumber}-${category}`;
-        const existing = dayResults[lastDay.dayNumber]?.[category];
-        if (existing && existing.length > 0) continue;
-        if (dayLoading[stateKey]) continue;
-
-        // Add delay between each category fetch (3 seconds)
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-
-        try {
-          await fetchCategoryResults(lastDayIndex, category, false);
-        } catch (error) {
-          console.error(`Failed to auto-fetch ${category} for Last Day:`, error);
-          // Continue to next category even if one fails
-        }
-      }
-    };
-
-    // Delay auto-fetch to avoid overwhelming APIs on page load
-    const timeoutId = setTimeout(() => {
-      fetchDay1();
-      if (daySections.length > 1) {
-        // fetchLastDay will wait for Day 1 to complete
-        fetchLastDay();
-      }
-    }, 2000); // Increased initial delay to 2 seconds
+    }, 2000); // Initial delay of 2 seconds
 
     return () => clearTimeout(timeoutId);
-  }, [daySections.length, fetchCategoryResults, dayResults, dayLoading]);
-
-  useEffect(() => {
-    const day = daySections[selectedDayIndex];
-    if (!day) {
-      return;
-    }
-    const stateKey = `${day.dayNumber}-${selectedCategory}`;
-    const existing = dayResults[day.dayNumber]?.[selectedCategory];
-    if (existing && existing.length > 0) {
-      return;
-    }
-    if (dayLoading[stateKey]) {
-      return;
-    }
-    // Only auto-fetch for intermediate days if user manually selects category
-    // Day 1 and Last Day are handled by the auto-fetch useEffect above
-    const isDay1 = day.dayNumber === daySections[0]?.dayNumber;
-    const isLastDay = day.dayNumber === daySections[daySections.length - 1]?.dayNumber;
-    if (isDay1 || isLastDay) {
-      return; // Already handled by auto-fetch
-    }
-    // For intermediate days, don't auto-fetch - user must use manual search
-  }, [
-    daySections,
-    selectedDayIndex,
-    selectedCategory,
-    dayResults,
-    dayLoading,
-    fetchCategoryResults,
-  ]);
+  }, [daySections, fetchCategoryResults, dayResults, dayLoading]);
 
   return (
     <div className="min-h-screen p-6">
@@ -1895,7 +1905,25 @@ const categoryLabels: Record<TravelCategory, string> = {
                           </div>
                         </div>
                         <div className="text-xs text-secondary/70">
-                          Tap a mode below to pull live options for Day {currentDay.dayNumber}.
+                          {currentDay.suggestedTransport ? (
+                            <>
+                              AI suggested <strong className="text-primary">
+                                {currentDay.suggestedTransport === 'flight' ? 'flights' : 
+                                 currentDay.suggestedTransport === 'train' ? 'trains' : 'buses'}
+                              </strong> for this day. 
+                              {(() => {
+                                const categoryKey = currentDay.suggestedTransport === 'flight' ? 'flights' : 
+                                                   currentDay.suggestedTransport === 'train' ? 'trains' : 'buses';
+                                const results = dayResults[currentDay.dayNumber]?.[categoryKey];
+                                if (results && results.length > 0) {
+                                  return <span className="text-emerald-400"> ✓ Auto-fetched ({results.length} options)</span>;
+                                }
+                                return <span className="text-amber-400"> ⏳ Auto-fetching...</span>;
+                              })()}
+                            </>
+                          ) : (
+                            'Tap a mode below to search for travel options, or use manual search for any destination.'
+                          )}
                         </div>
                       </div>
                     </div>
