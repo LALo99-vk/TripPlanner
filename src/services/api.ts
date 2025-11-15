@@ -247,6 +247,21 @@ class ApiService {
     });
   }
 
+  async regeneratePlanParts(params: {
+    instructions: string;
+    context: Array<{
+      type: 'activity' | 'date' | 'time' | 'location';
+      currentValue: string;
+      label: string;
+    }>;
+    fullItinerary: any[];
+  }): Promise<{ success: boolean; data: { regeneratedContent: string[] }; timestamp: string }> {
+    return this.makeRequest('/ai/regenerate-plan', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
   async checkHealth(): Promise<{ status: string; message: string }> {
     return this.makeRequest<{ status: string; message: string }>('/health');
   }

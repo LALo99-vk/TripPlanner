@@ -1,22 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, FolderOpen, Calendar as CalendarIcon } from 'lucide-react';
-import { useAuth } from '../../hooks/useAuth';
-import {
-  GroupItineraryActivity,
+import { CalendarIcon, Plus, FolderOpen, Edit3 } from 'lucide-react';
+import { 
+  GroupItineraryActivity, 
+  CreateActivityData, 
+  UpdateActivityData,
   createActivity,
   updateActivity,
   deleteActivity,
-  subscribeGroupItinerary,
   importPlanToGroupItinerary,
   replaceGroupItineraryWithPlan,
-  CreateActivityData,
-  UpdateActivityData,
+  subscribeGroupItinerary
 } from '../../services/itineraryRepository';
 import { SavedPlanRecord } from '../../services/planRepository';
-import { getApprovalStatus, subscribeToApprovalStatus, type ApprovalStatus } from '../../services/planApprovalRepository';
+import { ApprovalStatus, subscribeToApprovalStatus } from '../../services/planApprovalRepository';
+import { useAuth } from '../../hooks/useAuth';
 import ActivityCard from './ActivityCard';
 import AddActivityModal from './AddActivityModal';
 import ImportFromPlansModal from './ImportFromPlansModal';
+import EditPlanModal from './EditPlanModal';
 import PlanApprovalSection from './PlanApprovalSection';
 
 interface ItinerarySectionProps {
@@ -33,6 +34,7 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showEditPlanModal, setShowEditPlanModal] = useState(false);
   const [replaceMode, setReplaceMode] = useState(false);
   const [editingActivity, setEditingActivity] = useState<GroupItineraryActivity | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -88,6 +90,18 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
       console.error('Error creating activity:', error);
       showToastMessage('Failed to add activity. Please try again.', 'error');
       throw error;
+    }
+  };
+
+  const handleActivitySubmit = async (data: CreateActivityData | UpdateActivityData) => {
+    if ('id' in data && data.id !== undefined) {
+      // This is an update - use handleUpdateActivity
+      const updateData = data as UpdateActivityData;
+      await handleUpdateActivity(updateData);
+    } else {
+      // This is a create - use handleCreateActivity
+      const createData = data as CreateActivityData;
+      await handleCreateActivity(createData);
     }
   };
 
@@ -166,6 +180,30 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
     }
   };
 
+  const handleUpdateActivities = async (updatedActivities: GroupItineraryActivity[]) => {
+    // This function will update all activities at once
+    // For now, we'll update each activity individually
+    // In a real implementation, you might want a bulk update API
+    try {
+      for (const activity of updatedActivities) {
+        await updateActivity(activity.id, user?.uid || '', {
+          title: activity.title,
+          description: activity.description || undefined,
+          date: activity.date,
+          startTime: activity.startTime || undefined,
+          endTime: activity.endTime || undefined,
+          location: activity.location || undefined,
+        });
+      }
+      
+      showToastMessage('Plan updated successfully!');
+    } catch (error) {
+      console.error('Error updating activities:', error);
+      showToastMessage('Failed to update plan. Please try again.', 'error');
+      throw error;
+    }
+  };
+
   // Group activities by date
   const activitiesByDate = activities.reduce((acc, activity) => {
     const date = activity.date;
@@ -202,13 +240,24 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
                   setReplaceMode(true);
                   setShowImportModal(true);
                 }}
-                className="premium-button-secondary flex items-center gap-2 text-sm"
+                className="premium-button-secondary flex items-center gap-2 text-sm border-orange-500/50 hover:border-orange-500/80 hover:bg-orange-500/10"
                 title="Replace entire itinerary with a saved plan"
                 disabled={isPlanFixed && !isLeader}
               >
                 <FolderOpen className="h-4 w-4" />
                 Replace Itinerary
               </button>
+              {activities.length > 0 && (
+                <button
+                  onClick={() => setShowEditPlanModal(true)}
+                  className="premium-button-secondary flex items-center gap-2 text-sm border-blue-500/50 hover:border-blue-500/80 hover:bg-blue-500/10"
+                  title="Edit parts of the plan with AI assistance"
+                  disabled={isPlanFixed && !isLeader}
+                >
+                  <Edit3 className="h-4 w-4" />
+                  Edit Plan
+                </button>
+              )}
               <button
                 onClick={() => setShowAddModal(true)}
                 className="premium-button-primary flex items-center gap-2 text-sm"
@@ -299,7 +348,7 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
       <AddActivityModal
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
-        onSubmit={handleCreateActivity}
+        onSubmit={handleActivitySubmit}
       />
 
       {/* Edit Activity Modal */}
@@ -325,6 +374,14 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         onImport={handleImportPlan}
+      />
+
+      {/* Edit Plan Modal */}
+      <EditPlanModal
+        isOpen={showEditPlanModal}
+        onClose={() => setShowEditPlanModal(false)}
+        activities={activities}
+        onUpdateActivities={handleUpdateActivities}
       />
 
       {/* Toast Notification */}

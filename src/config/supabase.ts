@@ -22,6 +22,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+// Cache for authenticated clients to avoid multiple instances
+const authenticatedClientCache = new Map<string, SupabaseClient>();
+
 /**
  * Get Supabase client for authenticated operations
  * 
@@ -48,21 +51,29 @@ export async function getAuthenticatedSupabaseClient(): Promise<SupabaseClient> 
     return supabase;
   }
 
+  // Check cache first to avoid creating multiple instances
+  const cacheKey = user.uid;
+  if (authenticatedClientCache.has(cacheKey)) {
+    return authenticatedClientCache.get(cacheKey)!;
+  }
+
   // Option 1: Use service role key (bypasses RLS, but we check user_id in app code)
   if (supabaseServiceKey) {
-    return createClient(supabaseUrl, supabaseServiceKey, {
+    const client = createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false,
       },
     });
+    authenticatedClientCache.set(cacheKey, client);
+    return client;
   }
 
   // Option 2: Try to use Firebase token (requires Supabase Firebase integration)
   // This won't work unless you've configured Supabase to verify Firebase tokens
   const token = await user.getIdToken();
   
-  return createClient(supabaseUrl, supabaseAnonKey, {
+  const client = createClient(supabaseUrl, supabaseAnonKey, {
     global: {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -74,5 +85,15 @@ export async function getAuthenticatedSupabaseClient(): Promise<SupabaseClient> 
       persistSession: false,
     },
   });
+  
+  authenticatedClientCache.set(cacheKey, client);
+  return client;
 }
+
+// Clear cached clients when user signs out
+auth.onAuthStateChanged((user) => {
+  if (!user) {
+    authenticatedClientCache.clear();
+  }
+});
 

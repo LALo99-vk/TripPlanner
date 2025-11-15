@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { Users, Plus, X, ChevronLeft, Crown, Trash2, MapPin } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
-import AuthPage from '../Auth/AuthPage';
-import { Plus, Users, MapPin, Calendar, X, Crown, Trash2 } from 'lucide-react';
-import GroupDetailPage from './GroupDetailPage';
 import {
   createGroup,
   getGroup,
@@ -13,6 +11,8 @@ import {
   type Group,
   type CreateGroupData,
 } from '../../services/groupRepository';
+import AuthPage from '../Auth/AuthPage';
+import GroupDetailPage from './GroupDetailPage';
 
 interface Toast {
   id: string;
