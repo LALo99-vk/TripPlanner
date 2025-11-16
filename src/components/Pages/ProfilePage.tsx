@@ -5,6 +5,7 @@ import { listUserPlans, SavedPlanRecord, subscribeUserPlans } from '../../servic
 import { planStore } from '../../services/planStore';
 import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 import { updateProfile } from 'firebase/auth';
+import { getMedicalProfile, upsertMedicalProfile, MedicalProfile } from '../../services/medicalProfileRepository';
 
 interface UserProfile {
   displayName: string;
@@ -40,6 +41,15 @@ const ProfilePage: React.FC = () => {
   const [editPhoto, setEditPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  // Medical profile state
+  const [medicalProfile, setMedicalProfile] = useState<MedicalProfile | null>(null);
+  const [medicalBloodType, setMedicalBloodType] = useState('');
+  const [medicalAllergiesInput, setMedicalAllergiesInput] = useState('');
+  const [medicalConditionsInput, setMedicalConditionsInput] = useState('');
+  const [medicalEmergencyName, setMedicalEmergencyName] = useState('');
+  const [medicalEmergencyPhone, setMedicalEmergencyPhone] = useState('');
+  const [isMedicalLoading, setIsMedicalLoading] = useState(false);
+  const [isMedicalSaving, setIsMedicalSaving] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -60,7 +70,7 @@ const ProfilePage: React.FC = () => {
           return;
         }
 
-        if (data) {
+            if (data) {
           const profileData = {
             displayName: data.display_name || '',
             photoURL: data.photo_url || '',
@@ -120,6 +130,28 @@ const ProfilePage: React.FC = () => {
     loadProfile();
     loadPosts();
 
+    // Load medical profile (Supabase first, then localStorage fallback)
+    const loadMedical = async () => {
+      try {
+        setIsMedicalLoading(true);
+        const profile = await getMedicalProfile(user.uid);
+        if (profile) {
+          setMedicalProfile(profile);
+          setMedicalBloodType(profile.bloodType || '');
+          setMedicalAllergiesInput(profile.allergies.join(', '));
+          setMedicalConditionsInput(profile.medicalConditions.join(', '));
+          setMedicalEmergencyName(profile.emergencyContactName || '');
+          setMedicalEmergencyPhone(profile.emergencyContactPhone || '');
+        }
+      } catch (error) {
+        console.error('Error loading medical profile:', error);
+      } finally {
+        setIsMedicalLoading(false);
+      }
+    };
+
+    loadMedical();
+
     // Load user's saved plans (history) in real-time
     const unsubPlans = subscribeUserPlans(user.uid, (recs) => setPlans(recs));
     
@@ -139,6 +171,7 @@ const ProfilePage: React.FC = () => {
             displayName: data.display_name || '',
             photoURL: data.photo_url || '',
             bio: data.bio || '',
+            homeLocation: data.home_location || '',
             followersCount: data.followers_count || 0,
             followingCount: data.following_count || 0,
             tripsCount: data.trips_count || 0,
@@ -171,7 +204,7 @@ const ProfilePage: React.FC = () => {
     }
   };
 
-  // Save profile changes
+  // Save profile changes (including medical info)
   const handleSaveProfile = async () => {
     if (!user) return;
     
@@ -251,6 +284,32 @@ const ProfilePage: React.FC = () => {
       }
       
       console.log('✅ Profile saved to Supabase successfully');
+
+      // Upsert medical profile in Supabase
+      try {
+        const allergies = medicalAllergiesInput
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        const conditions = medicalConditionsInput
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+
+        const updatedMedical = await upsertMedicalProfile(user.uid, {
+          bloodType: medicalBloodType.trim() || null,
+          allergies,
+          medicalConditions: conditions,
+          emergencyContactName: medicalEmergencyName.trim() || null,
+          emergencyContactPhone: medicalEmergencyPhone.trim() || null,
+        });
+
+        setMedicalProfile(updatedMedical);
+        console.log('✅ Medical profile saved successfully');
+      } catch (medError) {
+        console.error('❌ Error saving medical profile:', medError);
+        // Do not block main profile save; just log the error
+      }
 
       // Update Firebase Auth profile (this will trigger auth state change)
       if (user) {
@@ -401,6 +460,66 @@ const ProfilePage: React.FC = () => {
                     <p className="text-xs text-secondary mt-1">
                       This helps us suggest the best travel options for your trips
                     </p>
+                  </div>
+                  {/* Medical Information (edited together with profile) */}
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-primary mb-1">Blood Type</label>
+                      <input
+                        type="text"
+                        value={medicalBloodType}
+                        onChange={(e) => setMedicalBloodType(e.target.value)}
+                        placeholder="e.g., O+, A-, B+"
+                        className="glass-input w-full px-4 py-2 rounded-lg text-primary"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-primary mb-1">Emergency Contact Name</label>
+                      <input
+                        type="text"
+                        value={medicalEmergencyName}
+                        onChange={(e) => setMedicalEmergencyName(e.target.value)}
+                        placeholder="Person to contact in emergencies"
+                        className="glass-input w-full px-4 py-2 rounded-lg text-primary"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-primary mb-1">Allergies</label>
+                      <input
+                        type="text"
+                        value={medicalAllergiesInput}
+                        onChange={(e) => setMedicalAllergiesInput(e.target.value)}
+                        placeholder="Comma separated (e.g., peanuts, penicillin)"
+                        className="glass-input w-full px-4 py-2 rounded-lg text-primary"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-primary mb-1">Emergency Contact Phone</label>
+                      <input
+                        type="tel"
+                        value={medicalEmergencyPhone}
+                        onChange={(e) => setMedicalEmergencyPhone(e.target.value)}
+                        placeholder="Phone number"
+                        className="glass-input w-full px-4 py-2 rounded-lg text-primary"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-primary mb-1">Medical Conditions</label>
+                      <input
+                        type="text"
+                        value={medicalConditionsInput}
+                        onChange={(e) => setMedicalConditionsInput(e.target.value)}
+                        placeholder="Comma separated (e.g., asthma, diabetes)"
+                        className="glass-input w-full px-4 py-2 rounded-lg text-primary"
+                      />
+                      <p className="text-xs text-secondary mt-1">
+                        Only include information you are comfortable sharing. This will be shown on your Emergency page.
+                      </p>
+                    </div>
                   </div>
                   <div className="flex space-x-3">
                     <button

@@ -120,13 +120,19 @@ const TripPlannerPage: React.FC = () => {
 
       const ai = response.data;
       planStore.setPlan(ai);
-      // Persist to Firestore if user is logged in
+      // Persist to Supabase if user is logged in
       const user = auth.currentUser;
       if (user) {
         try {
-          await saveUserPlan(user.uid, ai);
+          await saveUserPlan({
+            userId: user.uid,
+            plan: ai,
+            userBudget: formData.budget,
+            optimizedBudget: ai.totals?.totalCostINR,
+            categoryBudgets: ai.totals?.breakdown,
+          });
         } catch (e) {
-          console.error('Failed to save plan to Firestore:', e);
+          console.error('Failed to save plan to Supabase:', e);
         }
       }
       

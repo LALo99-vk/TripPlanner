@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { planStore } from '../../services/planStore';
 import { AiTripPlanData } from '../../services/api';
-import { ChevronDown, ChevronRight, Clock, Download, Link2, Save, Share2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, Download, Link2, Save } from 'lucide-react';
 import { useWeatherForecast } from '../../services/weatherService';
 import { generateWeatherRecommendation } from '../../services/recommendationService';
 import WeatherCard from '../Weather/WeatherCard';
@@ -86,7 +86,7 @@ const YourPlanPage: React.FC = () => {
   };
 
   const handleSaveProfile = () => {
-    const id = planStore.savePlanToLibrary();
+    planStore.savePlanToLibrary();
     alert('Saved to your profile (local library).');
   };
 
@@ -97,7 +97,11 @@ const YourPlanPage: React.FC = () => {
     const name = window.prompt('Enter a name for this plan:', `${plan.overview.to} (${plan.overview.durationDays}D)`);
     if (!name) return;
     try {
-      await saveUserPlan(user.uid, plan, name);
+      await saveUserPlan({
+        userId: user.uid,
+        plan,
+        name,
+      });
       alert('Plan saved to your profile in the cloud.');
     } catch (e) {
       console.error(e);
@@ -175,7 +179,7 @@ const YourPlanPage: React.FC = () => {
                         const suggestion = weatherSuggestions.get(d.day) || 
                           generateWeatherRecommendation({
                             city: destination,
-                            date: new Date(d.date || startDate),
+                            date: d.date ? new Date(d.date) : new Date(),
                             temperature: d.weather.temperature,
                             condition: d.weather.condition,
                             icon: d.weather.icon,

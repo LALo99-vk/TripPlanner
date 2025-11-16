@@ -10,14 +10,36 @@ export interface SavedPlanRecord {
   plan: AiTripPlanData;
 }
 
+export interface SaveUserPlanInput {
+  userId: string;
+  plan: AiTripPlanData;
+  name?: string;
+  userBudget?: number;
+  optimizedBudget?: number;
+  categoryBudgets?: any;
+}
+
 /**
  * Save a user's trip plan to Supabase
  */
-export async function saveUserPlan(userId: string, plan: AiTripPlanData, name?: string): Promise<string> {
+export async function saveUserPlan(input: SaveUserPlanInput): Promise<string> {
   const supabase = await getAuthenticatedSupabaseClient();
-  
+
+  const { userId, plan, name, userBudget, optimizedBudget, categoryBudgets } = input;
+
   const planName = name || `${plan.overview.to} (${plan.overview.durationDays}D)`;
-  
+
+  const finalOptimizedBudget =
+    optimizedBudget ?? (plan.totals?.totalCostINR ?? null);
+
+  const finalCategoryBudgets =
+    categoryBudgets ?? (plan.totals?.breakdown ?? null);
+
+  const finalUserBudget =
+    userBudget ?? (plan as any).userBudget ?? null;
+
+  const totalEstimatedBudget = finalOptimizedBudget ?? 0;
+
   // Insert the plan
   const { data: planData, error: planError } = await supabase
     .from('plans')
@@ -25,6 +47,10 @@ export async function saveUserPlan(userId: string, plan: AiTripPlanData, name?: 
       user_id: userId,
       name: planName,
       plan_data: plan as any, // JSONB column
+      user_budget: finalUserBudget,
+      optimized_budget: finalOptimizedBudget,
+      category_budgets: finalCategoryBudgets,
+      total_estimated_budget: totalEstimatedBudget,
     })
     .select()
     .single();

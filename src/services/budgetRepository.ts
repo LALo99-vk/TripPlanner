@@ -348,9 +348,9 @@ export async function recalculateGroupMemberBalances(
     group_id: groupId,
     user_id: userId,
     user_name: value.userName,
-    total_paid: roundCurrency(value.totalPaid),
-    total_owed: roundCurrency(value.totalOwed),
-    balance: roundCurrency(value.totalPaid - value.totalOwed),
+    total_paid: Math.round(value.totalPaid * 100) / 100,
+    total_owed: Math.round(value.totalOwed * 100) / 100,
+    balance: Math.round((value.totalPaid - value.totalOwed) * 100) / 100,
   }));
 
   if (updates.length > 0) {
@@ -594,13 +594,8 @@ export async function updateMemberBudgetShares(
   const errors = updates.filter((result) => result.error);
   if (errors.length > 0) {
     console.error('Error updating member budget shares:', errors);
-    throw new Error('Failed to update some member budget shares');
+    throw new Error(`Failed to update ${errors.length} member budget shares`);
   }
 
-  return updates.map((result) => mapMemberSummary(result.data));
+  return updates.map((result) => mapMemberSummary(result.data!));
 }
-
-function roundCurrency(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-

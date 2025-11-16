@@ -771,6 +771,123 @@ ${JSON.stringify(plan)}`;
   }
 });
 
+// AI Regenerate Plan Parts endpoint
+app.post('/api/ai/regenerate-plan', async (req, res) => {
+  try {
+    const { instructions, context, fullItinerary } = req.body as {
+      instructions: string;
+      context: Array<{ type: string; currentValue: string; label: string }>;
+      fullItinerary: any[];
+    };
+
+    if (!instructions || !Array.isArray(context) || context.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing instructions or context',
+        message: 'Please provide edit instructions and at least one selected part.',
+      });
+    }
+
+    // Build a compact summary of the full itinerary for additional context
+    let itinerarySummary = '';
+    try {
+      const daysByDate: Record<string, any[]> = {};
+      (fullItinerary || []).forEach((activity: any) => {
+        const dateKey = activity.date || 'unknown-date';
+        if (!daysByDate[dateKey]) daysByDate[dateKey] = [];
+        daysByDate[dateKey].push(activity);
+      });
+
+      itinerarySummary = Object.entries(daysByDate)
+        .map(([date, acts]) => {
+          const titles = (acts as any[]).slice(0, 5).map((a) => a.title).join(', ');
+          return `- ${date}: ${titles}${(acts as any[]).length > 5 ? '…' : ''}`;
+        })
+        .join('\n');
+    } catch {
+      itinerarySummary = 'Itinerary structure unavailable';
+    }
+
+    const contextDescription = context
+      .map((item, index) => {
+        return `PART ${index + 1} [${item.type.toUpperCase()}]\nLabel: ${item.label}\nCurrent value: ${item.currentValue}`;
+      })
+      .join('\n\n');
+
+    const prompt = `You are WanderWise, an expert Indian travel planner. You will update specific parts of an existing group itinerary based on the user's instructions.
+
+IMPORTANT RULES:
+- You must return STRICT JSON ONLY, no extra text, in the format: { "regeneratedContent": ["string", "string", ...] }
+- The regeneratedContent array MUST have the same length and same order as the parts listed below.
+- Each item in regeneratedContent MUST be a single string value that can be directly used to replace the corresponding current value.
+- Preserve the overall style and realism of an Indian trip itinerary (locations, times, descriptions).
+- If instructions are vague, make sensible but conservative improvements.
+
+USER INSTRUCTIONS:
+"""${instructions}"""
+
+SELECTED ITINERARY PARTS (in order):
+${contextDescription}
+
+FULL ITINERARY SUMMARY (for context, do not rewrite all of this):
+${itinerarySummary}
+
+Now generate the updated values ONLY for the selected parts, in the same order, as strict JSON: { "regeneratedContent": ["newValue1", "newValue2", ...] }`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are a precise trip editing assistant. Always return strict JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 800,
+      temperature: 0.6,
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content || '{}';
+
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(aiResponse);
+    } catch {
+      const trimmed = aiResponse.replace(/^```[a-zA-Z]*\n?|```$/g, '').trim();
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        parsed = null;
+      }
+    }
+
+    if (!parsed || !Array.isArray(parsed.regeneratedContent)) {
+      return res.status(502).json({
+        success: false,
+        error: 'Invalid AI response',
+        message: 'AI did not return the expected JSON format.',
+      });
+    }
+
+    // Ensure the array length matches the number of selected parts
+    const regeneratedContent: string[] = parsed.regeneratedContent.slice(0, context.length).map((val: any) => {
+      if (typeof val === 'string') return val;
+      if (val == null) return '';
+      return String(val);
+    });
+
+    res.json({
+      success: true,
+      data: { regeneratedContent },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Regenerate Plan Parts Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to regenerate plan parts',
+      message: 'Please try again later',
+    });
+  }
+});
+
 // AI Booking Recommendations endpoint
 app.post('/api/ai/booking-recommendations', async (req, res) => {
   try {

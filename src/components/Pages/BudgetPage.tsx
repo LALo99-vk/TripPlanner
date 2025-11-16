@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { PlusCircle, DollarSign, TrendingUp, PieChart, Download, Share, Wallet, MapPin, Calendar, Crown } from 'lucide-react';
+import { PlusCircle, DollarSign, TrendingUp, PieChart, Download, Share, Wallet, MapPin, Calendar, Crown, Brain } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { apiService } from '../../services/api';
 import {
@@ -14,8 +14,8 @@ import {
   subscribeToGroupBudget,
   subscribeToGroupExpenses,
   subscribeToGroupMembers,
-  updateMemberBudgetShare,
   updateMemberBudgetShares,
+  upsertGroupBudget,
   uploadExpenseReceipt,
 } from '../../services/budgetRepository';
 import { getGroup, getUserGroups, subscribeUserGroups, type Group } from '../../services/groupRepository';
@@ -171,15 +171,39 @@ const BudgetPage: React.FC = () => {
 
         await ensureGroupMemberRecords(groupId, groupData.members);
 
-        const [budgetData, expensesData, membersData] = await Promise.all([
+        const [budgetData, expensesData, membersData, finalizedPlanData] = await Promise.all([
           getGroupBudget(groupId),
           getGroupExpenses(groupId),
           getGroupMembersSummary(groupId),
+          getFinalizedPlan(groupId),
         ]);
 
-        setBudget(budgetData);
+        // Use finalized plan budget if available, otherwise use existing budget
+        let finalBudget: GroupBudgetRecord | null = budgetData;
+        if (finalizedPlanData) {
+          if (!budgetData) {
+            // Create budget from finalized plan
+            finalBudget = await upsertGroupBudget({
+              groupId: groupId,
+              totalBudget: finalizedPlanData.totalEstimatedBudget,
+              createdBy: user.uid,
+              categoryAllocations: finalizedPlanData.categoryBudgets || {},
+            });
+          } else if (budgetData.totalBudget !== finalizedPlanData.totalEstimatedBudget) {
+            // Update existing budget to match finalized plan
+            finalBudget = await upsertGroupBudget({
+              groupId: groupId,
+              totalBudget: finalizedPlanData.totalEstimatedBudget,
+              createdBy: user.uid,
+              categoryAllocations: finalizedPlanData.categoryBudgets || {},
+            });
+          }
+        }
+
+        setBudget(finalBudget);
         setExpenses(expensesData);
         setMembers(membersData);
+        setFinalizedPlan(finalizedPlanData);
 
         setNewExpense((prev) => ({
           ...prev,
@@ -203,8 +227,7 @@ const BudgetPage: React.FC = () => {
         });
 
         // Load finalized plan
-        const planData = await getFinalizedPlan(groupId);
-        setFinalizedPlan(planData);
+        // Note: finalizedPlanData is already fetched from Promise.all above
       } catch (err) {
         console.error('Failed to load budget data:', err);
         setError('Failed to load budget data. Please try again.');
@@ -218,15 +241,21 @@ const BudgetPage: React.FC = () => {
     // Subscribe to finalized plan changes
     let unsubscribePlan: (() => void) | null = null;
     if (groupId) {
-      unsubscribePlan = subscribeToFinalizedPlan(groupId, (plan) => {
+      unsubscribePlan = subscribeToFinalizedPlan(groupId, async (plan) => {
         setFinalizedPlan(plan);
-        // If plan is synced, refresh budget
-        if (plan?.syncedToBudget) {
-          getGroupBudget(groupId).then((budgetData) => {
-            if (budgetData) {
-              setBudget(budgetData);
-            }
-          });
+        // If there's a finalized plan, sync the budget
+        if (plan) {
+          const currentBudget = await getGroupBudget(groupId);
+          if (!currentBudget || currentBudget.totalBudget !== plan.totalEstimatedBudget) {
+            // Create or update budget to match finalized plan
+            const newBudget = await upsertGroupBudget({
+              groupId: groupId,
+              totalBudget: plan.totalEstimatedBudget,
+              createdBy: user.uid,
+              categoryAllocations: plan.categoryBudgets || {},
+            });
+            setBudget(newBudget);
+          }
         }
       });
     }
@@ -259,12 +288,22 @@ const BudgetPage: React.FC = () => {
     }));
   }, [group]);
 
+  // AI Budget from finalized plan (reference only)
+  const aiBudget = useMemo(() => {
+    if (!finalizedPlan) return null;
+    
+    return {
+      total: finalizedPlan.totalEstimatedBudget || 0,
+      categories: finalizedPlan.categoryBudgets || {},
+    };
+  }, [finalizedPlan]);
+
+  // User's actual budget and expenses
+  const totalBudget = finalizedPlan?.totalEstimatedBudget ?? budget?.totalBudget ?? 0;
   const totalSpent = useMemo(
     () => expenses.reduce((sum, expense) => sum + expense.amount, 0),
     [expenses]
   );
-
-  const totalBudget = budget?.totalBudget ?? 0;
   const remaining = totalBudget - totalSpent;
 
   const categoryAggregates = useMemo(() => {
@@ -277,13 +316,28 @@ const BudgetPage: React.FC = () => {
       }
     >();
 
-    expenses.forEach((expense, index) => {
+    // First, add all budget categories from the user's budget (if available)
+    if (budget?.categoryAllocations) {
+      Object.entries(budget.categoryAllocations).forEach(([category, allocation]) => {
+        aggregates.set(category, {
+          spent: 0,
+          budgeted: allocation.budgeted || 0,
+          color: allocation.color || colorPalette[0],
+        });
+      });
+    }
+
+    // Then, add or update with actual expenses
+    expenses.forEach((expense) => {
       const existing = aggregates.get(expense.category);
       const color =
         budget?.categoryAllocations?.[expense.category]?.color ||
-        colorPalette[index % colorPalette.length];
+        (existing?.color) ||
+        colorPalette[aggregates.size % colorPalette.length];
       const budgeted =
-        budget?.categoryAllocations?.[expense.category]?.budgeted ?? totalBudget;
+        budget?.categoryAllocations?.[expense.category]?.budgeted ?? 
+        (existing?.budgeted ?? 0); // No fallback to totalBudget
+      
       if (existing) {
         aggregates.set(expense.category, {
           spent: existing.spent + expense.amount,
@@ -305,7 +359,7 @@ const BudgetPage: React.FC = () => {
       budgeted: value.budgeted,
       color: value.color,
     }));
-  }, [expenses, budget, totalBudget]);
+  }, [expenses, budget]);
 
   const memberSpending = useMemo(() => {
     const map = new Map<string, number>();
@@ -741,6 +795,55 @@ const BudgetPage: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Budget Overview */}
               <div className="lg:col-span-2 space-y-6">
+                {/* AI-Predicted Budget Plan */}
+                {aiBudget && (
+                  <div className="glass-card p-6">
+                    <h2 className="text-2xl font-bold text-primary mb-6 flex items-center">
+                      <Brain className="h-6 w-6 mr-2 text-blue-400" />
+                      AI-Predicted Budget Plan
+                    </h2>
+                    
+                    <div className="mb-6">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-secondary">Total AI Budget</p>
+                          <p className="text-3xl font-bold text-blue-400">
+                            ₹{aiBudget.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <Brain className="h-12 w-12 text-blue-400" />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h3 className="text-lg font-semibold text-primary mb-3">Category Breakdown</h3>
+                      {Object.entries(aiBudget.categories).map(([category, allocation], index) => (
+                        <div
+                          key={`${category}-${index}`}
+                          className="p-3 glass-card hover:bg-white/5 transition-all duration-300"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center">
+                              <div
+                                className="w-4 h-4 rounded-full mr-3"
+                                style={{ backgroundColor: allocation.color || colorPalette[index % colorPalette.length] }}
+                              ></div>
+                              <span className="font-medium text-primary">{category}</span>
+                            </div>
+                            <span className="text-sm text-blue-300">
+                              ₹{(allocation.budgeted || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 text-xs text-secondary bg-blue-400/10 px-3 py-2 rounded-lg">
+                      This is the AI-predicted budget for your trip. Use it as a reference while planning your actual expenses.
+                    </div>
+                  </div>
+                )}
+
                 {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="glass-card p-6">
@@ -796,12 +899,12 @@ const BudgetPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Category Breakdown */}
+              {/* Category Breakdown (User Actual vs Budget, with AI reference per category if available) */}
               <div className="glass-card p-6">
-                <h2 className="text-2xl font-bold text-primary mb-6">Category Breakdown</h2>
+                <h2 className="text-2xl font-bold text-primary mb-6">Category Breakdown (Actual vs Budget)</h2>
                 {categoryAggregates.length === 0 ? (
                   <div className="text-secondary text-sm">
-                    No expenses recorded yet. Add expenses to see the breakdown.
+                    No budget categories set. Please finalize a plan to see category budgets.
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -809,6 +912,9 @@ const BudgetPage: React.FC = () => {
                       const percentage =
                         category.budgeted > 0 ? (category.spent / category.budgeted) * 100 : 0;
                       const remainingForCategory = Math.max(category.budgeted - category.spent, 0);
+                      const aiAllocation =
+                        (aiBudget?.categories as any)?.[category.category] ?? null;
+                      const aiBudgetAmount = aiAllocation?.budgeted ?? null;
                       return (
                         <div
                           key={`${category.category}-${index}`}
@@ -822,10 +928,23 @@ const BudgetPage: React.FC = () => {
                               ></div>
                               <span className="font-semibold text-primary">{category.category}</span>
                             </div>
-                            <span className="text-sm text-secondary">
-                              ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
-                              / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </span>
+                            <div className="text-right text-xs text-secondary space-y-1">
+                              {aiBudgetAmount !== null && (
+                                <div>
+                                  <span className="font-medium text-blue-300">AI Budget</span>{' '}
+                                  <span>
+                                    ₹{aiBudgetAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                              )}
+                              <div>
+                                <span className="font-medium text-primary">Actual</span>{' '}
+                                <span>
+                                  ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                                  / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                           <div className="w-full bg-white/10 rounded-full h-3">
                             <div
@@ -1325,7 +1444,7 @@ const BudgetPage: React.FC = () => {
                   {chartView === 'category' ? (
                     categoryAggregates.length === 0 ? (
                       <div className="text-secondary text-sm text-center px-8">
-                        Expenses by category will appear here once recorded.
+                        Budget categories will appear here once a plan is finalized.
                       </div>
                     ) : (
                       <div className="w-full px-4">

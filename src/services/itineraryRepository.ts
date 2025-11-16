@@ -1,6 +1,6 @@
 import { getAuthenticatedSupabaseClient } from '../config/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { AiTripPlanData, AiPlanDay, AiPlanSlotItem, apiService } from './api';
+import { AiTripPlanData, AiPlanSlotItem, apiService } from './api';
 
 export interface ActivityLocation {
   name?: string;
@@ -182,7 +182,7 @@ export async function importPlanToGroupItinerary(
   let importedCount = 0;
 
   // Helper to extract city name from location string
-  function extractCityName(location: string | undefined): string | null {
+  function extractCityName(location: string | null | undefined): string | null {
     if (!location) return null;
     // Remove common descriptive words and extract city name
     const cleaned = location
@@ -290,23 +290,79 @@ export async function importPlanToGroupItinerary(
     return true;
   }
 
-  // Get group start date if not provided
+  // Get group start/end dates and destination if not provided
   let baseDate: Date;
+  const { data: groupData } = await supabase
+    .from('groups')
+    .select('start_date, end_date, destination')
+    .eq('id', groupId)
+    .single();
+
   if (groupStartDate) {
     baseDate = new Date(groupStartDate);
+  } else if (groupData?.start_date) {
+    baseDate = new Date(groupData.start_date);
   } else {
-    // Fetch group to get start date
-    const { data: groupData } = await supabase
-      .from('groups')
-      .select('start_date')
-      .eq('id', groupId)
+    baseDate = new Date();
+  }
+
+  let totalDays = 1;
+  if (groupData?.start_date && groupData?.end_date) {
+    const start = new Date(groupData.start_date);
+    const end = new Date(groupData.end_date);
+    totalDays = Math.max(
+      1,
+      Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+    );
+  }
+
+  // Upsert budget into group_finalized_plans from the imported plan
+  try {
+    const { data: planRow } = await supabase
+      .from('plans')
+      .select('id, name, user_budget, optimized_budget, category_budgets, total_estimated_budget, plan_data')
+      .eq('id', planId)
       .single();
-    
-    if (groupData?.start_date) {
-      baseDate = new Date(groupData.start_date);
-    } else {
-      baseDate = new Date(); // Fallback to today
+
+    if (planRow) {
+      const optimizedBudget = Number(
+        planRow.optimized_budget ??
+          planRow.total_estimated_budget ??
+          (planRow.plan_data as any)?.totals?.totalCostINR ??
+          0
+      );
+
+      const categoryBudgets =
+        planRow.category_budgets ??
+        (planRow.plan_data as any)?.totals?.breakdown ??
+        null;
+
+      const destination = groupData?.destination ?? plan.overview.to;
+
+      const startDate = groupData?.start_date ?? baseDate.toISOString().split('T')[0];
+      const endDate = groupData?.end_date ?? startDate;
+
+      await supabase
+        .from('group_finalized_plans')
+        .upsert(
+          {
+            group_id: groupId,
+            plan_id: planRow.id,
+            plan_name: planRow.name,
+            destination,
+            total_days: totalDays,
+            total_estimated_budget: optimizedBudget,
+            category_budgets: categoryBudgets,
+            start_date: startDate,
+            end_date: endDate,
+            status: 'editable',
+            synced_to_budget: false,
+          },
+          { onConflict: 'group_id' }
+        );
     }
+  } catch (error) {
+    console.error('Error syncing plan budget to group_finalized_plans:', error);
   }
 
   // Extract activities from plan days
@@ -385,7 +441,7 @@ export async function importPlanToGroupItinerary(
           destinationCity,
           date,
           day.day,
-          previousLocation ? extractCityName(previousLocation) : undefined,
+          previousLocation ? extractCityName(previousLocation) || undefined : undefined,
           slot.travelDistanceKm
         );
       }

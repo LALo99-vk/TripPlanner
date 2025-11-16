@@ -1,9 +1,7 @@
 import { getAuthenticatedSupabaseClient } from '../config/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { getGroupActivities } from './itineraryRepository';
 import { getGroup } from './groupRepository';
 import { upsertGroupBudget } from './budgetRepository';
-import type { AiTripPlanData } from './api';
 
 export interface PlanApproval {
   id: string;
@@ -144,15 +142,61 @@ async function checkAndFinalizePlan(groupId: string): Promise<void> {
     const group = await getGroup(groupId);
     if (!group) return;
 
-    // Get activities to calculate budget
-    const activities = await getGroupActivities(groupId);
-
-    // Calculate estimated budget from activities
-    // For now, we'll use a simple calculation or fetch from a plan if available
-    const totalEstimatedBudget = calculateEstimatedBudget(activities);
-    const categoryBudgets = calculateCategoryBudgets(activities, totalEstimatedBudget);
-
     const supabase = await getAuthenticatedSupabaseClient();
+
+    // Try to use existing finalized plan budgets if present
+    let totalEstimatedBudget = 0;
+    let categoryBudgets: Record<string, { budgeted: number; color?: string }> | null = null;
+
+    const { data: existingFinalized } = await supabase
+      .from('group_finalized_plans')
+      .select('total_estimated_budget, category_budgets, plan_id')
+      .eq('group_id', groupId)
+      .maybeSingle();
+
+    let sourcePlanId: string | null = existingFinalized?.plan_id ?? null;
+
+    if (existingFinalized?.total_estimated_budget) {
+      totalEstimatedBudget = parseFloat(existingFinalized.total_estimated_budget as any);
+      categoryBudgets = existingFinalized.category_budgets;
+    }
+
+    // If no budget yet, look at the most recent imported plan for this group
+    if (totalEstimatedBudget === 0) {
+      const { data: itineraryData } = await supabase
+        .from('group_itinerary_activities')
+        .select('plan_id')
+        .eq('group_id', groupId)
+        .not('plan_id', 'is', null)
+        .limit(1)
+        .single();
+
+      if (itineraryData && itineraryData.plan_id) {
+        sourcePlanId = itineraryData.plan_id;
+      }
+    }
+
+    if (totalEstimatedBudget === 0 && sourcePlanId) {
+      const { data: planRow } = await supabase
+        .from('plans')
+        .select('optimized_budget, total_estimated_budget, category_budgets, plan_data')
+        .eq('id', sourcePlanId)
+        .single();
+
+      if (planRow) {
+        totalEstimatedBudget = Number(
+          planRow.optimized_budget ??
+            planRow.total_estimated_budget ??
+            (planRow.plan_data as any)?.totals?.totalCostINR ??
+            0
+        );
+
+        categoryBudgets =
+          planRow.category_budgets ??
+          (planRow.plan_data as any)?.totals?.breakdown ??
+          null;
+      }
+    }
 
     const agreedMembers = status.approvals
       .filter((a) => a.vote === 'agree')
@@ -175,6 +219,7 @@ async function checkAndFinalizePlan(groupId: string): Promise<void> {
       .upsert(
         {
           group_id: groupId,
+          plan_id: sourcePlanId,
           destination: group.destination,
           total_days: totalDays,
           total_estimated_budget: totalEstimatedBudget,
@@ -268,6 +313,7 @@ export async function getFinalizedPlan(groupId: string): Promise<FinalizedPlan |
     .from('group_finalized_plans')
     .select('*')
     .eq('group_id', groupId)
+    .eq('status', 'fixed')
     .maybeSingle();
 
   if (error) {
@@ -386,36 +432,7 @@ export function subscribeToApprovalStatus(
   };
 }
 
-/**
- * Calculate estimated budget from activities
- */
-function calculateEstimatedBudget(activities: any[]): number {
-  // Simple calculation: assume average cost per activity
-  // In a real app, you'd extract costs from activity data or use plan totals
-  const avgCostPerActivity = 500; // ₹500 per activity as default
-  return activities.length * avgCostPerActivity || 10000; // Minimum ₹10,000
-}
-
-/**
- * Calculate category budgets from activities
- */
-function calculateCategoryBudgets(
-  activities: any[],
-  totalBudget: number
-): Record<string, { budgeted: number; color?: string }> {
-  // Simple distribution based on activity count
-  // In a real app, you'd categorize activities and calculate properly
-  const categoryMap: Record<string, { budgeted: number; color: string }> = {
-    Transport: { budgeted: totalBudget * 0.3, color: '#3B82F6' },
-    Accommodation: { budgeted: totalBudget * 0.25, color: '#10B981' },
-    Food: { budgeted: totalBudget * 0.2, color: '#F59E0B' },
-    Activities: { budgeted: totalBudget * 0.15, color: '#EF4444' },
-    Shopping: { budgeted: totalBudget * 0.05, color: '#8B5CF6' },
-    Miscellaneous: { budgeted: totalBudget * 0.05, color: '#06B6D4' },
-  };
-
-  return categoryMap;
-}
+// Note: heuristic budget calculation helpers removed; budgets now always come from stored plan data.
 
 /**
  * Helper function to map database row to PlanApproval interface
