@@ -337,8 +337,8 @@ TRIP OVERVIEW (Context for all days):
 - Travelers: ${travelers}
 - Interests: ${Array.isArray(interests) ? interests.join(', ') : interests}
 - Trip Style: ${tripStyle || 'balanced'}
-${customDestinations && customDestinations.length > 0 ? `- Must-visit destinations: ${customDestinations.join(', ')}\n` : ''}
-${customActivities && customActivities.length > 0 ? `- Specific activities requested: ${customActivities.join(', ')}\n` : ''}
+${customDestinations && customDestinations.length > 0 ? `- Must-visit destinations (must appear in the itinerary at least once across the trip): ${customDestinations.join(', ')}\n` : ''}
+${customActivities && customActivities.length > 0 ? `- Specific activities requested (must appear in the itinerary at least once across the trip): ${customActivities.join(', ')}\n` : ''}
 
 DAY ${dayNumber} SPECIFIC DETAILS:
 - Date: ${date}
@@ -358,6 +358,7 @@ CRITICAL REQUIREMENTS:
 6. Include local hidden gems or lesser-known spots if applicable
 7. Consider weather conditions when planning timing and activity types
 8. Provide realistic costs in INR (no symbols)
+9. Whenever possible, schedule any remaining must-visit destinations and specific requested activities that have not yet been covered on previous days, ensuring they appear in the overall trip.
 
 OUTPUT JSON SCHEMA (follow exactly):
 {
