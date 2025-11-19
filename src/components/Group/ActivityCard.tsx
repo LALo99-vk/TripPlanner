@@ -107,6 +107,11 @@ const ActivityCard: React.FC<ActivityCardProps> = ({
           Last edited: {new Date(activity.lastEditedAt).toLocaleString()}
         </div>
       )}
+      <div className="mt-3 hidden group-hover:block">
+        <div className="text-xs text-secondary">
+          {activity.description || activity.location?.name || timeDisplay() || 'Details'}
+        </div>
+      </div>
     </div>
   );
 };

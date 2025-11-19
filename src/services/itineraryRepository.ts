@@ -150,6 +150,39 @@ export async function updateActivity(
   return mapActivityData(activityData);
 }
 
+export async function updateActivityOrderIndex(
+  activityId: string,
+  orderIndex: number
+): Promise<void> {
+  const supabase = await getAuthenticatedSupabaseClient();
+  const { error } = await supabase
+    .from('group_itinerary_activities')
+    .update({ order_index: orderIndex })
+    .eq('id', activityId);
+  if (error) {
+    throw error;
+  }
+}
+
+export async function reorderActivitiesForDate(
+  groupId: string,
+  date: string,
+  orderedIds: string[]
+): Promise<void> {
+  const supabase = await getAuthenticatedSupabaseClient();
+  for (let i = 0; i < orderedIds.length; i++) {
+    const { error } = await supabase
+      .from('group_itinerary_activities')
+      .update({ order_index: i })
+      .eq('group_id', groupId)
+      .eq('date', date)
+      .eq('id', orderedIds[i]);
+    if (error) {
+      throw error;
+    }
+  }
+}
+
 /**
  * Delete an activity
  */

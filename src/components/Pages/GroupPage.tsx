@@ -13,6 +13,7 @@ import {
 } from '../../services/groupRepository';
 import AuthPage from '../Auth/AuthPage';
 import GroupDetailPage from './GroupDetailPage';
+import { useScrollReveal } from '../../hooks/useScrollReveal';
 
 interface Toast {
   id: string;
@@ -224,6 +225,7 @@ const GroupPage: React.FC = () => {
   return (
     <div className="min-h-screen p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
+        {useScrollReveal()}
         {/* Header with Create Button */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -256,7 +258,7 @@ const GroupPage: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-4">
                 {groups.map((group) => (
                   <div
                     key={group.id}
@@ -264,7 +266,7 @@ const GroupPage: React.FC = () => {
                       setSelectedGroupId(group.id);
                       window.history.pushState({}, '', `/group/${group.id}`);
                     }}
-                    className="glass-card p-4 cursor-pointer transition-all hover:bg-white/10 relative"
+                    className="glass-card p-4 cursor-pointer transition-all hover:bg-white/10 relative reveal"
                   >
                     <div className="flex items-start justify-between mb-2">
                       <h3 className="font-semibold text-primary text-sm flex-1">{group.groupName}</h3>

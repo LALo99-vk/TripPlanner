@@ -63,6 +63,41 @@ function App() {
     return () => unsub();
   }, []);
 
+  useEffect(() => {
+    let startX = 0;
+    let startY = 0;
+    let touching = false;
+    const threshold = 50;
+    const edge = 24;
+    const onTouchStart = (e: TouchEvent) => {
+      if (window.innerWidth >= 1024) return;
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      touching = true;
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!touching || window.innerWidth >= 1024) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (!sidebarOpen && startX <= edge && dx > threshold) {
+          setSidebarOpen(true);
+        } else if (sidebarOpen && dx < -threshold) {
+          setSidebarOpen(false);
+        }
+      }
+      touching = false;
+    };
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener('touchstart', onTouchStart as any);
+      window.removeEventListener('touchend', onTouchEnd as any);
+    };
+  }, [sidebarOpen]);
+
   const renderPage = () => {
     switch (currentPage) {
       case 'home':

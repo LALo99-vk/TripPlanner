@@ -9,7 +9,8 @@ import {
   deleteActivity,
   importPlanToGroupItinerary,
   replaceGroupItineraryWithPlan,
-  subscribeGroupItinerary
+  subscribeGroupItinerary,
+  reorderActivitiesForDate
 } from '../../services/itineraryRepository';
 import { SavedPlanRecord } from '../../services/planRepository';
 import { ApprovalStatus, subscribeToApprovalStatus } from '../../services/planApprovalRepository';
@@ -19,6 +20,7 @@ import AddActivityModal from './AddActivityModal';
 import ImportFromPlansModal from './ImportFromPlansModal';
 import EditPlanModal from './EditPlanModal';
 import PlanApprovalSection from './PlanApprovalSection';
+import { useScrollReveal } from '../../hooks/useScrollReveal';
 
 interface ItinerarySectionProps {
   groupId: string;
@@ -42,6 +44,9 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
 
   const isLeader = user?.uid === leaderId;
   const isPlanFixed = approvalStatus?.isFixed || false;
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+
+  useScrollReveal();
 
   // Subscribe to real-time updates
   useEffect(() => {
@@ -305,7 +310,7 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
       ) : (
         <div className="space-y-6">
           {sortedDates.map((date) => (
-            <div key={date} className="glass-card p-4">
+            <div key={date} className="glass-card p-4 reveal">
               <div className="flex items-center gap-2 mb-4 pb-2 border-b border-white/10">
                 <CalendarIcon className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-semibold text-primary">
@@ -321,22 +326,74 @@ const ItinerarySection: React.FC<ItinerarySectionProps> = ({
                 </span>
               </div>
               <div className="space-y-3">
-                {activitiesByDate[date].map((activity) => (
-                  <ActivityCard
+                {activitiesByDate[date].map((activity, index) => (
+                  <div
                     key={activity.id}
-                    activity={activity}
-                    currentUserId={user?.uid || ''}
-                    isLeader={isLeader}
-                    onEdit={() => {
-                      if (isPlanFixed && !isLeader) {
-                        showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
-                        return;
-                      }
-                      setEditingActivity(activity);
+                    draggable={!isPlanFixed || isLeader}
+                    onDragStart={() => setDraggedId(activity.id)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
                     }}
-                    onDelete={() => handleDeleteActivity(activity.id)}
-                    canEdit={!isPlanFixed || isLeader}
-                  />
+                onDrop={async () => {
+                  if (!draggedId || draggedId === activity.id) return;
+                  const list = activitiesByDate[date];
+                  const fromIndex = list.findIndex(a => a.id === draggedId);
+                  const toIndex = index;
+                  if (fromIndex === -1 || toIndex === -1) return;
+                  const reordered = [...list];
+                  const [moved] = reordered.splice(fromIndex, 1);
+                  reordered.splice(toIndex, 0, moved);
+                  setActivities(prev => {
+                    const other = prev.filter(a => a.date !== date);
+                    const withUpdated = other.concat(reordered.map((a, i) => ({ ...a, orderIndex: i })));
+                    return withUpdated.sort((a, b) => a.date.localeCompare(b.date) || (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+                  });
+                  try {
+                    await reorderActivitiesForDate(groupId, date, reordered.map(a => a.id));
+                    showToastMessage('Order updated');
+                  } catch (e) {
+                    showToastMessage('Failed to update order', 'error');
+                  }
+                  setDraggedId(null);
+                }}
+                    onKeyDown={(e) => {
+                      const items = Array.from((e.currentTarget.parentElement?.children || []) as any) as HTMLElement[];
+                      const currentIndex = index;
+                      if (e.key === 'ArrowDown') {
+                        const next = items[currentIndex + 1] as HTMLElement;
+                        next?.focus();
+                        e.preventDefault();
+                      } else if (e.key === 'ArrowUp') {
+                        const prevEl = items[currentIndex - 1] as HTMLElement;
+                        prevEl?.focus();
+                        e.preventDefault();
+                      } else if (e.key === 'Enter') {
+                        if (isPlanFixed && !isLeader) return;
+                        setEditingActivity(activity);
+                      } else if (e.key === 'Delete') {
+                        if (isPlanFixed && !isLeader) return;
+                        handleDeleteActivity(activity.id);
+                      }
+                    }}
+                    role="listitem"
+                    tabIndex={0}
+                    className={`group ${draggedId === activity.id ? 'opacity-80' : ''}`}
+                  >
+                    <ActivityCard
+                      activity={activity}
+                      currentUserId={user?.uid || ''}
+                      isLeader={isLeader}
+                      onEdit={() => {
+                        if (isPlanFixed && !isLeader) {
+                          showToastMessage('This plan is locked. Only the leader can make changes.', 'error');
+                          return;
+                        }
+                        setEditingActivity(activity);
+                      }}
+                      onDelete={() => handleDeleteActivity(activity.id)}
+                      canEdit={!isPlanFixed || isLeader}
+                    />
+                  </div>
                 ))}
               </div>
             </div>

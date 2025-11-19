@@ -35,6 +35,19 @@ const ShareExperienceModal: React.FC<ShareExperienceModalProps> = ({
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const items = e.dataTransfer.files;
+    if (items && items.length) {
+      const files = Array.from(items);
+      setSelectedFiles(prev => [...prev, ...files].slice(0, 5));
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !caption.trim()) return;
@@ -184,7 +197,11 @@ const ShareExperienceModal: React.FC<ShareExperienceModalProps> = ({
             </label>
             
             {/* File Input */}
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-orange-500 transition-colors">
+            <div
+              className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-orange-500 transition-colors"
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+            >
               <input
                 type="file"
                 multiple
