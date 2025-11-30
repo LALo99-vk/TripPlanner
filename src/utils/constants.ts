@@ -1,3 +1,7 @@
+// Re-export from shared constants
+export * from '../../../shared/constants';
+
+// Keep web-specific constants here if needed
 export const INDIAN_CITIES = [
   { name: 'Mumbai', state: 'Maharashtra' },
   { name: 'Delhi', state: 'Delhi' },

@@ -1,11 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Users, Calendar, Settings, Grid, Heart, Edit2, X, Save, Camera, Map } from 'lucide-react';
+import { MapPin, Grid, Heart, Edit2, X, Save, Camera, Map, Loader2, Upload, MessageCircle, Share2, Send, Bookmark } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
-import { listUserPlans, SavedPlanRecord, subscribeUserPlans } from '../../services/planRepository';
+import { SavedPlanRecord, subscribeUserPlans } from '../../services/planRepository';
 import { planStore } from '../../services/planStore';
 import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 import { updateProfile } from 'firebase/auth';
-import { getMedicalProfile, upsertMedicalProfile, MedicalProfile } from '../../services/medicalProfileRepository';
+import { getMedicalProfile, upsertMedicalProfile } from '../../services/medicalProfileRepository';
+import { updateUserDisplayNameInGroups } from '../../services/groupRepository';
+import { 
+  createPost, 
+  subscribeUserPosts, 
+  uploadPostImage, 
+  togglePostLike,
+  getPostComments,
+  addPostComment,
+  sharePost,
+  getUserBookmarkedPosts,
+  type PostRecord,
+  type PostComment
+} from '../../services/postRepository';
 
 interface UserProfile {
   displayName: string;
@@ -17,19 +30,11 @@ interface UserProfile {
   tripsCount: number;
 }
 
-interface TripPost {
-  id: string;
-  mediaUrls: string[];
-  caption: string;
-  location: string;
-  likesCount: number;
-  timestamp: any;
-}
-
 const ProfilePage: React.FC = () => {
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [posts, setPosts] = useState<TripPost[]>([]);
-  const [activeTab, setActiveTab] = useState<'plans' | 'posts' | 'liked'>('plans');
+  const [posts, setPosts] = useState<PostRecord[]>([]);
+  const [activeTab, setActiveTab] = useState<'plans' | 'posts' | 'bookmarked'>('plans');
+  const [bookmarkedPosts, setBookmarkedPosts] = useState<PostRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
   const [plans, setPlans] = useState<SavedPlanRecord[]>([]);
@@ -42,14 +47,44 @@ const ProfilePage: React.FC = () => {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   // Medical profile state
-  const [medicalProfile, setMedicalProfile] = useState<MedicalProfile | null>(null);
   const [medicalBloodType, setMedicalBloodType] = useState('');
   const [medicalAllergiesInput, setMedicalAllergiesInput] = useState('');
   const [medicalConditionsInput, setMedicalConditionsInput] = useState('');
   const [medicalEmergencyName, setMedicalEmergencyName] = useState('');
   const [medicalEmergencyPhone, setMedicalEmergencyPhone] = useState('');
-  const [isMedicalLoading, setIsMedicalLoading] = useState(false);
-  const [isMedicalSaving, setIsMedicalSaving] = useState(false);
+  const [, setIsMedicalLoading] = useState(false);
+  
+  // Post creation state
+  const [showPostModal, setShowPostModal] = useState(false);
+  const [postImage, setPostImage] = useState<File | null>(null);
+  const [postImagePreview, setPostImagePreview] = useState<string | null>(null);
+  const [postCaption, setPostCaption] = useState('');
+  const [postLocation, setPostLocation] = useState('');
+  const [isUploadingPost, setIsUploadingPost] = useState(false);
+  
+  // Post interaction state
+  const [selectedPost, setSelectedPost] = useState<PostRecord | null>(null);
+  const [postLikes, setPostLikes] = useState<Record<string, { count: number; liked: boolean }>>({});
+  const [postComments, setPostComments] = useState<Record<string, PostComment[]>>({});
+  const [newComment, setNewComment] = useState('');
+  const [isAddingComment, setIsAddingComment] = useState(false);
+  const [isLiking, setIsLiking] = useState<string | null>(null);
+
+  // Load bookmarked posts when tab is active
+  useEffect(() => {
+    if (!user || activeTab !== 'bookmarked') return;
+
+    const loadBookmarkedPosts = async () => {
+      try {
+        const bookmarked = await getUserBookmarkedPosts(user.uid);
+        setBookmarkedPosts(bookmarked);
+      } catch (error) {
+        console.error('Error loading bookmarked posts:', error);
+      }
+    };
+
+    loadBookmarkedPosts();
+  }, [user, activeTab]);
 
   useEffect(() => {
     if (!user) return;
@@ -93,42 +128,13 @@ const ProfilePage: React.FC = () => {
       }
     };
 
-    // Load user's posts from Supabase
-    const loadPosts = async () => {
-      try {
-        const supabase = await getAuthenticatedSupabaseClient();
-        const { data, error } = await supabase
-          .from('posts')
-          .select('*')
-          .eq('author_id', user.uid)
-          .order('created_at', { ascending: false });
-
-        if (error) {
-          console.error('Error loading posts:', error);
-          setLoading(false);
-          return;
-        }
-
-        if (data) {
-          const postsData: TripPost[] = data.map((post) => ({
-            id: post.id,
-            mediaUrls: post.media_urls || [],
-            caption: post.caption || '',
-            location: post.location || '',
-            likesCount: post.likes_count || 0,
-            timestamp: post.created_at,
-          }));
-          setPosts(postsData);
-        }
-        setLoading(false);
-      } catch (error) {
-        console.error('Error loading posts:', error);
-        setLoading(false);
-      }
-    };
-
     loadProfile();
-    loadPosts();
+
+    // Subscribe to user posts in real-time
+    const unsubscribePosts = subscribeUserPosts(user.uid, (updatedPosts) => {
+      setPosts(updatedPosts);
+      setLoading(false);
+    });
 
     // Load medical profile (Supabase first, then localStorage fallback)
     const loadMedical = async () => {
@@ -136,7 +142,6 @@ const ProfilePage: React.FC = () => {
         setIsMedicalLoading(true);
         const profile = await getMedicalProfile(user.uid);
         if (profile) {
-          setMedicalProfile(profile);
           setMedicalBloodType(profile.bloodType || '');
           setMedicalAllergiesInput(profile.allergies.join(', '));
           setMedicalConditionsInput(profile.medicalConditions.join(', '));
@@ -187,6 +192,7 @@ const ProfilePage: React.FC = () => {
     
     return () => {
       unsubPlans();
+      unsubscribePosts();
       window.removeEventListener('profileUpdated', handleProfileUpdate);
     };
   }, [user]);
@@ -235,7 +241,7 @@ const ProfilePage: React.FC = () => {
           console.log('📤 Uploading profile photo to Supabase Storage...');
           
           // Upload to Supabase Storage
-          const { data: uploadData, error: uploadError } = await supabase.storage
+          const { error: uploadError } = await supabase.storage
             .from('profile-photos')
             .upload(filePath, editPhoto, {
               cacheControl: '3600',
@@ -296,7 +302,7 @@ const ProfilePage: React.FC = () => {
           .map((item) => item.trim())
           .filter((item) => item.length > 0);
 
-        const updatedMedical = await upsertMedicalProfile(user.uid, {
+        await upsertMedicalProfile(user.uid, {
           bloodType: medicalBloodType.trim() || null,
           allergies,
           medicalConditions: conditions,
@@ -304,7 +310,6 @@ const ProfilePage: React.FC = () => {
           emergencyContactPhone: medicalEmergencyPhone.trim() || null,
         });
 
-        setMedicalProfile(updatedMedical);
         console.log('✅ Medical profile saved successfully');
       } catch (medError) {
         console.error('❌ Error saving medical profile:', medError);
@@ -357,14 +362,24 @@ const ProfilePage: React.FC = () => {
       setEditPhoto(null);
       setPhotoPreview(null);
       
+      // Update display name in all groups user is a member of
+      try {
+        await updateUserDisplayNameInGroups(user.uid, editName.trim() || user.displayName || 'User');
+        console.log('✅ Display name updated in all groups');
+      } catch (groupUpdateError) {
+        console.error('⚠️ Error updating display name in groups:', groupUpdateError);
+        // Don't fail the whole operation, just log the error
+      }
+      
       // Dispatch event to update profile name across app (before showing success)
       window.dispatchEvent(new CustomEvent('profileUpdated'));
       
       // Show success message
       console.log('✅ Profile updated successfully!');
       console.log('✅ Changes synced to:');
-      console.log('   - Supabase Database');
+      console.log('   - Supabase Database (users table)');
       console.log('   - Firebase Auth');
+      console.log('   - All groups (groups.members & group_members.user_name)');
       console.log('   - App UI (Sidebar, Group Page, Profile Page)');
     } catch (error: any) {
       console.error('❌ Error saving profile:', error);
@@ -380,6 +395,192 @@ const ProfilePage: React.FC = () => {
     setEditName(profile?.displayName || user?.displayName || '');
     setEditPhoto(null);
     setPhotoPreview(null);
+  };
+
+  // Handle post image selection
+  const handlePostImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setPostImage(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPostImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Handle post submission
+  const handleSubmitPost = async () => {
+    if (!user || !postImage || !postCaption.trim()) {
+      return;
+    }
+
+    setIsUploadingPost(true);
+    try {
+      // Upload image first
+      const imageUrl = await uploadPostImage(user.uid, postImage);
+
+      // Create post with optimistic update
+      const optimisticPost: PostRecord = {
+        id: `temp_${Date.now()}`,
+        author_id: user.uid,
+        media_urls: [imageUrl],
+        caption: postCaption.trim(),
+        location: postLocation.trim() || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Optimistic update: add post immediately
+      setPosts((prev) => [optimisticPost, ...prev]);
+
+      // Create post in database
+      const savedPost = await createPost({
+        userId: user.uid,
+        imageUrl,
+        caption: postCaption.trim(),
+        location: postLocation.trim() || undefined,
+      });
+
+      // Replace optimistic post with real one
+      setPosts((prev) => prev.map((p) => (p.id === optimisticPost.id ? savedPost : p)));
+
+      // Reset form
+      setPostImage(null);
+      setPostImagePreview(null);
+      setPostCaption('');
+      setPostLocation('');
+      setShowPostModal(false);
+    } catch (error: any) {
+      console.error('Error creating post:', error);
+      // Remove optimistic post on error
+      setPosts((prev) => prev.filter((p) => !p.id.startsWith('temp_')));
+      alert(`Failed to create post: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsUploadingPost(false);
+    }
+  };
+
+  // Close post modal and reset form
+  const handleClosePostModal = () => {
+    setShowPostModal(false);
+    setPostImage(null);
+    setPostImagePreview(null);
+    setPostCaption('');
+    setPostLocation('');
+  };
+
+  // Handle like/unlike post
+  const handleLikePost = async (postId: string) => {
+    if (!user || isLiking === postId) return;
+    
+    setIsLiking(postId);
+    try {
+      // Optimistic update
+      const currentLike = postLikes[postId];
+      const newLiked = !currentLike?.liked;
+      setPostLikes((prev) => ({
+        ...prev,
+        [postId]: {
+          count: newLiked ? (currentLike?.count || 0) + 1 : Math.max((currentLike?.count || 0) - 1, 0),
+          liked: newLiked,
+        },
+      }));
+
+      const result = await togglePostLike(postId, user.uid);
+      
+      // Update with real data
+      setPostLikes((prev) => ({
+        ...prev,
+        [postId]: {
+          count: result.likesCount,
+          liked: result.liked,
+        },
+      }));
+    } catch (error: any) {
+      console.error('Error toggling like:', error);
+      // Revert optimistic update
+      const currentLike = postLikes[postId];
+      setPostLikes((prev) => ({
+        ...prev,
+        [postId]: {
+          count: currentLike?.count || 0,
+          liked: currentLike?.liked || false,
+        },
+      }));
+    } finally {
+      setIsLiking(null);
+    }
+  };
+
+  // Handle open post detail (for comments)
+  const handleOpenPostDetail = async (post: PostRecord) => {
+    setSelectedPost(post);
+    
+    // Load comments
+    try {
+      const comments = await getPostComments(post.id);
+      setPostComments((prev) => ({ ...prev, [post.id]: comments }));
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    }
+  };
+
+  // Handle add comment
+  const handleAddComment = async () => {
+    if (!user || !selectedPost || !newComment.trim() || isAddingComment) return;
+
+    setIsAddingComment(true);
+    try {
+      const userName = profile?.displayName || user.displayName || 'User';
+      const comment = await addPostComment(
+        selectedPost.id,
+        user.uid,
+        userName,
+        newComment.trim()
+      );
+
+      // Optimistic update
+      setPostComments((prev) => ({
+        ...prev,
+        [selectedPost.id]: [...(prev[selectedPost.id] || []), comment],
+      }));
+
+      setNewComment('');
+    } catch (error: any) {
+      console.error('Error adding comment:', error);
+      alert('Failed to add comment. Please try again.');
+    } finally {
+      setIsAddingComment(false);
+    }
+  };
+
+  // Handle share post
+  const handleSharePost = async (post: PostRecord) => {
+    if (!user) return;
+
+    try {
+      // Record share in database
+      await sharePost(post.id, user.uid);
+
+      // Copy post URL to clipboard
+      const postUrl = `${window.location.origin}/profile?post=${post.id}`;
+      await navigator.clipboard.writeText(postUrl);
+      
+      // Show success message (you can use a toast here)
+      alert('Post link copied to clipboard!');
+    } catch (error: any) {
+      console.error('Error sharing post:', error);
+      // Fallback: just copy URL
+      try {
+        const postUrl = `${window.location.origin}/profile?post=${post.id}`;
+        await navigator.clipboard.writeText(postUrl);
+        alert('Post link copied to clipboard!');
+      } catch (clipboardError) {
+        console.error('Error copying to clipboard:', clipboardError);
+      }
+    }
   };
 
   if (loading) {
@@ -445,7 +646,7 @@ const ProfilePage: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-primary mb-2 flex items-center gap-2">
+                    <label className="flex text-sm font-medium text-primary mb-2 items-center gap-2">
                       <MapPin className="h-4 w-4" />
                       Home Location
                     </label>
@@ -616,15 +817,15 @@ const ProfilePage: React.FC = () => {
               Posts ({posts.length})
             </button>
             <button
-              onClick={() => setActiveTab('liked')}
+              onClick={() => setActiveTab('bookmarked')}
               className={`flex-1 flex items-center justify-center py-4 px-6 font-medium transition-colors ${
-                activeTab === 'liked'
+                activeTab === 'bookmarked'
                   ? 'text-primary border-b-2 border-white/30 bg-white/5'
                   : 'text-secondary hover:text-primary hover:bg-white/5'
               }`}
             >
-              <Heart className="h-5 w-5 mr-2" />
-              Liked
+              <Bookmark className="h-5 w-5 mr-2" />
+              Saved
             </button>
           </div>
 
@@ -691,54 +892,469 @@ const ProfilePage: React.FC = () => {
               <div>
                 {posts.length === 0 ? (
                   <div className="text-center py-12">
-                    <MapPin className="h-16 w-16 text-muted mx-auto mb-4" />
+                    <Camera className="h-16 w-16 text-secondary mx-auto mb-4" />
                     <h3 className="text-xl font-semibold text-primary mb-2">No posts yet</h3>
                     <p className="text-secondary mb-4">Share your travel experiences to get started!</p>
-                    <button className="premium-button-primary">
+                    <button 
+                      onClick={() => setShowPostModal(true)}
+                      className="premium-button-primary"
+                    >
                       Share Your First Trip
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {posts.map((post) => (
-                      <div key={post.id} className="glass-card overflow-hidden hover:bg-white/10 transition-all cursor-pointer">
-                        {post.mediaUrls.length > 0 && (
-                          <img 
-                            src={post.mediaUrls[0]} 
-                            alt="Trip experience"
-                            className="w-full h-48 object-cover"
-                          />
-                        )}
-                        <div className="p-4">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center text-sm text-secondary">
-                              <MapPin className="h-4 w-4 mr-1" />
-                              {post.location}
+                  <>
+                    <div className="mb-4 flex justify-end">
+                      <button
+                        onClick={() => setShowPostModal(true)}
+                        className="premium-button-primary flex items-center gap-2"
+                      >
+                        <Camera className="h-4 w-4" />
+                        New Post
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {posts.map((post) => {
+                        const likeInfo = postLikes[post.id] || { count: post.likes_count || 0, liked: false };
+                        const comments = postComments[post.id] || [];
+                        const commentsCount = post.comments_count || comments.length || 0;
+                        
+                        return (
+                          <div key={post.id} className="glass-card overflow-hidden hover:bg-white/10 transition-all group">
+                            <div className="relative aspect-square overflow-hidden">
+                              <img 
+                                src={post.media_urls[0] || ''} 
+                                alt={post.caption || 'Trip experience'}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 cursor-pointer"
+                                onClick={() => handleOpenPostDetail(post)}
+                              />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                <div className="flex items-center gap-6 text-white">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleLikePost(post.id);
+                                    }}
+                                    disabled={isLiking === post.id}
+                                    className={`flex items-center gap-2 hover:scale-110 transition-transform disabled:opacity-50 ${
+                                      likeInfo.liked ? 'text-red-400' : ''
+                                    }`}
+                                  >
+                                    <Heart className={`h-6 w-6 ${likeInfo.liked ? 'fill-current' : ''}`} />
+                                    <span className="text-base font-semibold">{likeInfo.count}</span>
+                                  </button>
+                                  
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenPostDetail(post);
+                                    }}
+                                    className="flex items-center gap-2 hover:scale-110 transition-transform"
+                                  >
+                                    <MessageCircle className="h-6 w-6" />
+                                    <span className="text-base font-semibold">{commentsCount}</span>
+                                  </button>
+                                  
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSharePost(post);
+                                    }}
+                                    className="flex items-center gap-2 hover:scale-110 transition-transform"
+                                  >
+                                    <Share2 className="h-6 w-6" />
+                                  </button>
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex items-center text-sm text-secondary">
-                              <Heart className="h-4 w-4 mr-1" />
-                              {post.likesCount}
+                            <div className="p-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <button
+                                  onClick={() => handleLikePost(post.id)}
+                                  disabled={isLiking === post.id}
+                                  className={`flex items-center gap-1 transition-colors disabled:opacity-50 ${
+                                    likeInfo.liked ? 'text-red-400' : 'text-secondary hover:text-red-400'
+                                  }`}
+                                >
+                                  <Heart className={`h-4 w-4 ${likeInfo.liked ? 'fill-current' : ''}`} />
+                                  <span className="text-sm font-semibold">{likeInfo.count}</span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenPostDetail(post)}
+                                  className="flex items-center gap-1 text-secondary hover:text-primary transition-colors"
+                                >
+                                  <MessageCircle className="h-4 w-4" />
+                                  <span className="text-sm font-semibold">{commentsCount}</span>
+                                </button>
+                              </div>
+                              <p className="text-primary text-sm line-clamp-2 mb-2">{post.caption}</p>
+                              {post.location && (
+                                <div className="flex items-center text-xs text-secondary">
+                                  <MapPin className="h-3 w-3 mr-1" />
+                                  {post.location}
+                                </div>
+                              )}
                             </div>
                           </div>
-                          <p className="text-primary text-sm line-clamp-2">{post.caption}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
             )}
 
-            {activeTab === 'liked' && (
-              <div className="text-center py-12">
-                <Heart className="h-16 w-16 text-muted mx-auto mb-4" />
-                <h3 className="text-xl font-semibold text-primary mb-2">No liked posts yet</h3>
-                <p className="text-secondary">Posts you like will appear here</p>
+            {activeTab === 'bookmarked' && (
+              <div>
+                {bookmarkedPosts.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Bookmark className="h-16 w-16 text-muted mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-primary mb-2">No saved posts yet</h3>
+                    <p className="text-secondary mb-4">Bookmark posts you want to save for later!</p>
+                    <button
+                      onClick={() => {
+                        const evt = new CustomEvent('navigate', { detail: { page: 'discover' } });
+                        window.dispatchEvent(evt as any);
+                      }}
+                      className="premium-button-primary"
+                    >
+                      Discover Posts
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {bookmarkedPosts.map((post) => {
+                      const likeInfo = postLikes[post.id] || { count: post.likes_count || 0, liked: false };
+                      const comments = postComments[post.id] || [];
+                      
+                      return (
+                        <div
+                          key={post.id}
+                          className="glass-card overflow-hidden cursor-pointer hover:bg-white/10 transition-all group"
+                          onClick={() => handleOpenPostDetail(post)}
+                        >
+                          {/* Post Image */}
+                          {post.media_urls && post.media_urls.length > 0 && (
+                            <div className="relative w-full" style={{ aspectRatio: '1 / 1' }}>
+                              <img
+                                src={post.media_urls[0]}
+                                alt={post.caption || 'Post'}
+                                className="w-full h-full object-cover"
+                              />
+                              {post.media_urls.length > 1 && (
+                                <div className="absolute top-2 right-2 glass-card px-2 py-1 rounded text-xs text-primary font-medium">
+                                  +{post.media_urls.length - 1}
+                                </div>
+                              )}
+                              {/* Hover overlay */}
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                <div className="flex items-center gap-4 text-white">
+                                  <div className="flex items-center gap-1">
+                                    <Heart className="h-5 w-5" />
+                                    <span className="text-sm font-semibold">{likeInfo.count}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <MessageCircle className="h-5 w-5" />
+                                    <span className="text-sm font-semibold">{comments.length}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Post Creation Modal */}
+      {showPostModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-card max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-2xl border border-white/20">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold text-primary">Create New Post</h2>
+                <button
+                  onClick={handleClosePostModal}
+                  disabled={isUploadingPost}
+                  className="text-secondary hover:text-primary transition-colors disabled:opacity-50"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {/* Image Upload */}
+                <div>
+                  <label className="block text-sm font-medium text-primary mb-2">
+                    Trip Photo *
+                  </label>
+                  {postImagePreview ? (
+                    <div className="relative">
+                      <img
+                        src={postImagePreview}
+                        alt="Post preview"
+                        className="w-full h-64 object-cover rounded-lg border border-white/10"
+                      />
+                      <button
+                        onClick={() => {
+                          setPostImage(null);
+                          setPostImagePreview(null);
+                        }}
+                        disabled={isUploadingPost}
+                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors disabled:opacity-50"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-white/20 rounded-lg cursor-pointer hover:border-white/40 transition-colors bg-white/5">
+                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <Camera className="h-12 w-12 text-secondary mb-4" />
+                        <p className="mb-2 text-sm text-primary">
+                          <span className="font-semibold">Click to upload</span> or drag and drop
+                        </p>
+                        <p className="text-xs text-secondary">PNG, JPG, GIF up to 10MB</p>
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePostImageSelect}
+                        disabled={isUploadingPost}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Caption */}
+                <div>
+                  <label className="block text-sm font-medium text-primary mb-2">
+                    Caption *
+                  </label>
+                  <textarea
+                    value={postCaption}
+                    onChange={(e) => setPostCaption(e.target.value)}
+                    placeholder="Write a caption..."
+                    rows={4}
+                    maxLength={500}
+                    disabled={isUploadingPost}
+                    className="w-full px-4 py-3 glass-input rounded-lg text-primary resize-none focus:ring-2 focus:ring-white/30 focus:border-white/30"
+                  />
+                  <p className="text-xs text-secondary mt-1">
+                    {postCaption.length}/500 characters
+                  </p>
+                </div>
+
+                {/* Location */}
+                <div>
+                  <label className="flex text-sm font-medium text-primary mb-2 items-center gap-2">
+                    <MapPin className="h-4 w-4" />
+                    Location (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={postLocation}
+                    onChange={(e) => setPostLocation(e.target.value)}
+                    placeholder="Where was this taken?"
+                    maxLength={100}
+                    disabled={isUploadingPost}
+                    className="w-full px-4 py-3 glass-input rounded-lg text-primary focus:ring-2 focus:ring-white/30 focus:border-white/30"
+                  />
+                </div>
+
+                {/* Submit Button */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleClosePostModal}
+                    disabled={isUploadingPost}
+                    className="flex-1 premium-button-secondary disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmitPost}
+                    disabled={isUploadingPost || !postImage || !postCaption.trim()}
+                    className="flex-1 premium-button-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isUploadingPost ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Posting...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="h-4 w-4" />
+                        Share Post
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post Detail Modal (Instagram-style) */}
+      {selectedPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
+          <div className="glass-card max-w-4xl w-full max-h-[90vh] overflow-hidden rounded-2xl border border-white/20 flex flex-col md:flex-row">
+            {/* Left: Image */}
+            <div className="w-full md:w-1/2 bg-black flex items-center justify-center">
+              <img
+                src={selectedPost.media_urls[0] || ''}
+                alt={selectedPost.caption || 'Post'}
+                className="w-full h-full object-contain max-h-[90vh]"
+              />
+            </div>
+
+            {/* Right: Comments and Interactions */}
+            <div className="w-full md:w-1/2 flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <img
+                    src={profile?.photoURL || user?.photoURL || '/default-avatar.png'}
+                    alt={profile?.displayName || 'User'}
+                    className="w-8 h-8 rounded-full object-cover"
+                  />
+                  <span className="font-semibold text-primary">{profile?.displayName || user?.displayName || 'User'}</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedPost(null);
+                    setNewComment('');
+                  }}
+                  className="text-secondary hover:text-primary transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Caption */}
+              <div className="p-4 border-b border-white/10">
+                <div className="flex items-start gap-3">
+                  <img
+                    src={profile?.photoURL || user?.photoURL || '/default-avatar.png'}
+                    alt={profile?.displayName || 'User'}
+                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-primary">{profile?.displayName || user?.displayName || 'User'}</span>
+                      {selectedPost.location && (
+                        <span className="text-xs text-secondary flex items-center gap-1">
+                          <MapPin className="h-3 w-3" />
+                          {selectedPost.location}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-primary text-sm">{selectedPost.caption}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Comments Section */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {postComments[selectedPost.id]?.map((comment) => (
+                  <div key={comment.id} className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs font-semibold text-primary">
+                        {comment.user_name.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-primary text-sm">{comment.user_name}</span>
+                        <span className="text-xs text-secondary">
+                          {new Date(comment.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-primary text-sm">{comment.comment_text}</p>
+                    </div>
+                  </div>
+                ))}
+                {(!postComments[selectedPost.id] || postComments[selectedPost.id].length === 0) && (
+                  <div className="text-center py-8 text-secondary text-sm">
+                    No comments yet. Be the first to comment!
+                  </div>
+                )}
+              </div>
+
+              {/* Actions Bar */}
+              <div className="p-4 border-t border-white/10 space-y-3">
+                {/* Like/Comment/Share Buttons */}
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => handleLikePost(selectedPost.id)}
+                    disabled={isLiking === selectedPost.id}
+                    className={`transition-colors disabled:opacity-50 ${
+                      postLikes[selectedPost.id]?.liked ? 'text-red-400' : 'text-secondary hover:text-red-400'
+                    }`}
+                  >
+                    <Heart className={`h-6 w-6 ${postLikes[selectedPost.id]?.liked ? 'fill-current' : ''}`} />
+                  </button>
+                  
+                  <button
+                    className="text-secondary hover:text-primary transition-colors"
+                  >
+                    <MessageCircle className="h-6 w-6" />
+                  </button>
+                  
+                  <button
+                    onClick={() => handleSharePost(selectedPost)}
+                    className="text-secondary hover:text-primary transition-colors"
+                  >
+                    <Share2 className="h-6 w-6" />
+                  </button>
+                </div>
+
+                {/* Likes Count */}
+                {postLikes[selectedPost.id] && postLikes[selectedPost.id].count > 0 && (
+                  <div className="text-sm font-semibold text-primary">
+                    {postLikes[selectedPost.id].count} {postLikes[selectedPost.id].count === 1 ? 'like' : 'likes'}
+                  </div>
+                )}
+
+                {/* Add Comment */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAddComment();
+                      }
+                    }}
+                    placeholder="Add a comment..."
+                    className="flex-1 px-3 py-2 glass-input rounded-lg text-sm text-primary focus:ring-2 focus:ring-white/30 focus:border-white/30"
+                    disabled={isAddingComment}
+                  />
+                  <button
+                    onClick={handleAddComment}
+                    disabled={!newComment.trim() || isAddingComment}
+                    className="p-2 text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isAddingComment ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Send className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -11,8 +11,10 @@ export interface GroupBudgetRecord {
     {
       budgeted: number;
       color?: string;
+      description?: string;
     }
   > | null;
+  lockedCategories?: string[]; // Array of locked category names
   createdBy: string;
   updatedAt: string;
 }
@@ -41,6 +43,7 @@ export interface GroupMemberSummary {
   totalPaid: number;
   totalOwed: number;
   balance: number;
+  walletBalance: number; // Remaining balance in individual contribution wallet
   updatedAt: string;
 }
 
@@ -82,6 +85,7 @@ export async function upsertGroupBudget(params: {
   totalBudget: number;
   createdBy: string;
   categoryAllocations?: GroupBudgetRecord['categoryAllocations'];
+  lockedCategories?: string[];
 }): Promise<GroupBudgetRecord> {
   const supabase = await getAuthenticatedSupabaseClient();
 
@@ -93,6 +97,7 @@ export async function upsertGroupBudget(params: {
         total_budget: params.totalBudget,
         created_by: params.createdBy,
         category_allocations: params.categoryAllocations ?? null,
+        locked_categories: params.lockedCategories ?? [],
       },
       { onConflict: 'group_id' }
     )
@@ -172,6 +177,7 @@ export async function ensureGroupMemberRecords(
       total_paid: 0,
       total_owed: 0,
       balance: 0,
+      wallet_balance: 0,
     }));
 
   if (inserts.length > 0) {
@@ -186,6 +192,12 @@ export async function ensureGroupMemberRecords(
 
 export async function addGroupExpense(input: CreateExpenseInput): Promise<GroupExpenseRecord> {
   const supabase = await getAuthenticatedSupabaseClient();
+
+  // Check if the category is locked
+  const budget = await getGroupBudget(input.groupId);
+  if (budget?.lockedCategories && budget.lockedCategories.includes(input.category)) {
+    throw new Error(`Category "${input.category}" is locked by the leader. Please contact the leader to unlock it before adding expenses.`);
+  }
 
   const { data, error } = await supabase
     .from('group_expenses')
@@ -295,14 +307,22 @@ export async function recalculateGroupMemberBalances(
       userName: string;
       totalPaid: number;
       totalOwed: number;
+      personalExpenses: number; // Expenses where member is the only one in split_between
     }
   >();
+
+  // Get budget shares from members data
+  const budgetShares = new Map<string, number>();
+  (membersData ?? []).forEach((member) => {
+    budgetShares.set(member.user_id, numberify(member.budget_share));
+  });
 
   directoryMap.forEach((name, userId) => {
     totals.set(userId, {
       userName: name,
       totalPaid: 0,
       totalOwed: 0,
+      personalExpenses: 0,
     });
   });
 
@@ -317,6 +337,7 @@ export async function recalculateGroupMemberBalances(
         userName: paidByName,
         totalPaid: 0,
         totalOwed: 0,
+        personalExpenses: 0,
       });
     }
 
@@ -328,12 +349,21 @@ export async function recalculateGroupMemberBalances(
     const splitBetween: string[] = (expense.split_between as string[]) ?? [];
     const share = splitBetween.length > 0 ? amount / splitBetween.length : 0;
 
+    // Check if this is a personal expense (only one person in split_between and it's the payer)
+    const isPersonalExpense = splitBetween.length === 1 && splitBetween[0] === paidById;
+    
+    if (isPersonalExpense && payer) {
+      // This is a personal expense - deduct from wallet
+      payer.personalExpenses += amount;
+    }
+
     splitBetween.forEach((userId) => {
       if (!totals.has(userId)) {
         totals.set(userId, {
           userName: directoryMap.get(userId) ?? 'Member',
           totalPaid: 0,
           totalOwed: 0,
+          personalExpenses: 0,
         });
       }
 
@@ -344,14 +374,20 @@ export async function recalculateGroupMemberBalances(
     });
   });
 
-  const updates = Array.from(totals.entries()).map(([userId, value]) => ({
+  const updates = Array.from(totals.entries()).map(([userId, value]) => {
+    const budgetShare = budgetShares.get(userId) || 0;
+    const walletBalance = Math.max(0, Math.round((budgetShare - value.personalExpenses) * 100) / 100);
+    
+    return {
     group_id: groupId,
     user_id: userId,
     user_name: value.userName,
     total_paid: Math.round(value.totalPaid * 100) / 100,
     total_owed: Math.round(value.totalOwed * 100) / 100,
     balance: Math.round((value.totalPaid - value.totalOwed) * 100) / 100,
-  }));
+      wallet_balance: walletBalance,
+    };
+  });
 
   if (updates.length > 0) {
     const { error } = await supabase.from('group_members').upsert(updates, {
@@ -494,6 +530,7 @@ function mapBudgetRecord(row: any): GroupBudgetRecord {
     groupId: row.group_id,
     totalBudget: numberify(row.total_budget),
     categoryAllocations: row.category_allocations,
+    lockedCategories: row.locked_categories || [],
     createdBy: row.created_by,
     updatedAt: row.updated_at,
   };
@@ -526,6 +563,7 @@ function mapMemberSummary(row: any): GroupMemberSummary {
     totalPaid: numberify(row.total_paid),
     totalOwed: numberify(row.total_owed),
     balance: numberify(row.balance),
+    walletBalance: numberify(row.wallet_balance ?? row.budget_share), // Default to budget_share if wallet_balance not set
     updatedAt: row.updated_at,
   };
 }
@@ -553,9 +591,28 @@ export async function updateMemberBudgetShare(
 ): Promise<GroupMemberSummary> {
   const supabase = await getAuthenticatedSupabaseClient();
 
+  // Get current member record to calculate new wallet balance
+  const { data: currentMember } = await supabase
+    .from('group_members')
+    .select('wallet_balance, budget_share')
+    .eq('group_id', groupId)
+    .eq('user_id', userId)
+    .single();
+
+  // Calculate personal expenses from current wallet balance
+  const currentWalletBalance = numberify(currentMember?.wallet_balance ?? currentMember?.budget_share ?? 0);
+  const currentBudgetShare = numberify(currentMember?.budget_share ?? 0);
+  const personalExpenses = currentBudgetShare - currentWalletBalance;
+  
+  // New wallet balance = new budget share - existing personal expenses
+  const newWalletBalance = Math.max(0, budgetShare - personalExpenses);
+
   const { data, error } = await supabase
     .from('group_members')
-    .update({ budget_share: budgetShare })
+    .update({ 
+      budget_share: budgetShare,
+      wallet_balance: newWalletBalance,
+    })
     .eq('group_id', groupId)
     .eq('user_id', userId)
     .select()
@@ -578,17 +635,37 @@ export async function updateMemberBudgetShares(
 ): Promise<GroupMemberSummary[]> {
   const supabase = await getAuthenticatedSupabaseClient();
 
-  // Update each member's budget share
+  // Get current member records to calculate wallet balances
+  const { data: currentMembers } = await supabase
+    .from('group_members')
+    .select('user_id, wallet_balance, budget_share')
+    .eq('group_id', groupId)
+    .in('user_id', shares.map(s => s.userId));
+
+  const memberMap = new Map(
+    (currentMembers ?? []).map((m) => [m.user_id, m])
+  );
+
+  // Update each member's budget share and wallet balance
   const updates = await Promise.all(
-    shares.map((share) =>
-      supabase
+    shares.map((share) => {
+      const currentMember = memberMap.get(share.userId);
+      const currentWalletBalance = numberify(currentMember?.wallet_balance ?? currentMember?.budget_share ?? 0);
+      const currentBudgetShare = numberify(currentMember?.budget_share ?? 0);
+      const personalExpenses = currentBudgetShare - currentWalletBalance;
+      const newWalletBalance = Math.max(0, share.budgetShare - personalExpenses);
+
+      return supabase
         .from('group_members')
-        .update({ budget_share: share.budgetShare })
+        .update({ 
+          budget_share: share.budgetShare,
+          wallet_balance: newWalletBalance,
+        })
         .eq('group_id', groupId)
         .eq('user_id', share.userId)
         .select()
-        .single()
-    )
+        .single();
+    })
   );
 
   const errors = updates.filter((result) => result.error);
@@ -598,4 +675,125 @@ export async function updateMemberBudgetShares(
   }
 
   return updates.map((result) => mapMemberSummary(result.data!));
+}
+
+/**
+ * Lock a budget category (leader only)
+ * Prevents expenses from being added to this category until unlocked
+ */
+export async function lockBudgetCategory(
+  groupId: string,
+  category: string,
+  leaderId: string
+): Promise<GroupBudgetRecord> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  // Verify user is leader
+  const { data: groupData } = await supabase
+    .from('groups')
+    .select('leader_id')
+    .eq('id', groupId)
+    .single();
+
+  if (!groupData || groupData.leader_id !== leaderId) {
+    throw new Error('Only the group leader can lock budget categories');
+  }
+
+  // Get current budget
+  const currentBudget = await getGroupBudget(groupId);
+  if (!currentBudget) {
+    throw new Error('Budget not found for this group');
+  }
+
+  const lockedCategories = currentBudget.lockedCategories || [];
+  
+  // Add category to locked list if not already locked
+  if (!lockedCategories.includes(category)) {
+    const updatedLockedCategories = [...lockedCategories, category];
+
+    const { data, error } = await supabase
+      .from('group_budgets')
+      .update({ locked_categories: updatedLockedCategories })
+      .eq('group_id', groupId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error locking budget category:', error);
+      throw error;
+    }
+
+    return mapBudgetRecord(data);
+  }
+
+  return currentBudget;
+}
+
+/**
+ * Unlock a budget category (leader only)
+ */
+export async function unlockBudgetCategory(
+  groupId: string,
+  category: string,
+  leaderId: string
+): Promise<GroupBudgetRecord> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  // Verify user is leader
+  const { data: groupData } = await supabase
+    .from('groups')
+    .select('leader_id')
+    .eq('id', groupId)
+    .single();
+
+  if (!groupData || groupData.leader_id !== leaderId) {
+    throw new Error('Only the group leader can unlock budget categories');
+  }
+
+  // Get current budget
+  const currentBudget = await getGroupBudget(groupId);
+  if (!currentBudget) {
+    throw new Error('Budget not found for this group');
+  }
+
+  const lockedCategories = currentBudget.lockedCategories || [];
+  
+  // Remove category from locked list
+  const updatedLockedCategories = lockedCategories.filter((cat) => cat !== category);
+
+  const { data, error } = await supabase
+    .from('group_budgets')
+    .update({ locked_categories: updatedLockedCategories })
+    .eq('group_id', groupId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error unlocking budget category:', error);
+    throw error;
+  }
+
+  return mapBudgetRecord(data);
+}
+
+/**
+ * Toggle lock status of a budget category (leader only)
+ */
+export async function toggleBudgetCategoryLock(
+  groupId: string,
+  category: string,
+  leaderId: string
+): Promise<GroupBudgetRecord> {
+  const currentBudget = await getGroupBudget(groupId);
+  if (!currentBudget) {
+    throw new Error('Budget not found for this group');
+  }
+
+  const isLocked = currentBudget.lockedCategories?.includes(category) || false;
+
+  if (isLocked) {
+    return await unlockBudgetCategory(groupId, category, leaderId);
+  } else {
+    return await lockBudgetCategory(groupId, category, leaderId);
+  }
 }

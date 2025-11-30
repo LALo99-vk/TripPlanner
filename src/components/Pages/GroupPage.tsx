@@ -27,6 +27,8 @@ const GroupPage: React.FC = () => {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [newGroup, setNewGroup] = useState<CreateGroupData>({
@@ -66,7 +68,7 @@ const GroupPage: React.FC = () => {
 
   // Handle group ID from URL (both query param and path)
   useEffect(() => {
-    if (!user || groups.length === 0) return;
+    if (!user) return;
 
     // Check URL path for /group/{groupId} pattern (but not just /group)
     const pathMatch = window.location.pathname.match(/\/group\/([^/]+)/);
@@ -79,8 +81,8 @@ const GroupPage: React.FC = () => {
     const groupId = pathGroupId || queryGroupId;
     
     if (groupId) {
-      // Check if user is already a member
-      const isMember = groups.some(g => g.id === groupId);
+      // Check if user is already a member (only if groups are loaded)
+      const isMember = groups.length > 0 && groups.some(g => g.id === groupId);
       
       if (isMember) {
         // User is already a member, navigate to detail page
@@ -88,7 +90,8 @@ const GroupPage: React.FC = () => {
         // Update URL to show group detail page
         window.history.pushState({}, '', `/group/${groupId}`);
       } else {
-        // User is not a member, try to join
+        // User is not a member (or groups not loaded yet), try to join
+        // This will work for new users who have no groups yet
         handleJoinGroup(groupId);
       }
       
@@ -104,16 +107,31 @@ const GroupPage: React.FC = () => {
 
   // Load user groups
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setGroupsLoading(false);
+      return;
+    }
 
-    // Initial load
-    getUserGroups(user.uid).then((userGroups) => {
+    setGroupsLoading(true);
+    setGroupsError(null);
+
+    // Initial load with error handling
+    getUserGroups(user.uid)
+      .then((userGroups) => {
       setGroups(userGroups);
+        setGroupsLoading(false);
+      })
+      .catch((error) => {
+        console.error('Error loading groups:', error);
+        setGroupsError('Failed to load groups. Please try again.');
+        setGroupsLoading(false);
     });
 
     // Subscribe to real-time updates
     const unsubscribe = subscribeUserGroups(user.uid, (updatedGroups) => {
       setGroups(updatedGroups);
+      setGroupsLoading(false);
+      setGroupsError(null);
     });
 
     return () => {
@@ -195,6 +213,9 @@ const GroupPage: React.FC = () => {
     }
   };
 
+  // Call hook at top level (before any conditional returns)
+  useScrollReveal();
+
   // Show loading spinner while checking authentication
   if (loading) {
     return (
@@ -225,7 +246,6 @@ const GroupPage: React.FC = () => {
   return (
     <div className="min-h-screen p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
-        {useScrollReveal()}
         {/* Header with Create Button */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -246,7 +266,37 @@ const GroupPage: React.FC = () => {
           <div className="glass-card p-4">
             <h2 className="text-xl font-semibold text-primary mb-4">Your Groups</h2>
             
-            {groups.length === 0 ? (
+            {groupsLoading ? (
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500 mx-auto mb-3"></div>
+                <p className="text-muted text-sm">Loading groups...</p>
+              </div>
+            ) : groupsError ? (
+              <div className="text-center py-8">
+                <p className="text-red-400 text-sm mb-4">{groupsError}</p>
+                <button
+                  onClick={() => {
+                    if (user) {
+                      setGroupsLoading(true);
+                      getUserGroups(user.uid)
+                        .then((userGroups) => {
+                          setGroups(userGroups);
+                          setGroupsLoading(false);
+                          setGroupsError(null);
+                        })
+                        .catch((error) => {
+                          console.error('Error reloading groups:', error);
+                          setGroupsError('Failed to load groups. Please try again.');
+                          setGroupsLoading(false);
+                        });
+                    }
+                  }}
+                  className="premium-button-secondary text-sm"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : groups.length === 0 ? (
               <div className="text-center py-8">
                 <Users className="h-12 w-12 text-muted mx-auto mb-3" />
                 <p className="text-muted text-sm mb-4">No groups yet</p>

@@ -44,8 +44,8 @@ const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
       )}
 
       {/* Hero Section */}
-      <section className="min-h-screen flex items-center justify-center px-4">
-        <div className="max-w-4xl mx-auto text-center text-white">
+      <section className="min-h-screen flex items-center justify-center px-4 lg:px-6">
+        <div className="w-full max-w-4xl mx-auto text-center text-white">
           <div className="inline-flex items-center mb-8">
             <span className="accent-glow">New</span>
             <span className="ml-3 text-white/60 font-medium">

@@ -315,6 +315,77 @@ export function subscribeUserGroups(
 }
 
 /**
+ * Update user's display name across all groups they're a member of
+ */
+export async function updateUserDisplayNameInGroups(
+  userId: string,
+  newDisplayName: string
+): Promise<void> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  // Get all groups where user is a member
+  const { data: userGroups, error: userGroupsError } = await supabase
+    .from('user_groups')
+    .select('group_id')
+    .eq('user_id', userId);
+
+  if (userGroupsError) {
+    console.error('Error fetching user groups for name update:', userGroupsError);
+    throw userGroupsError;
+  }
+
+  if (!userGroups || userGroups.length === 0) {
+    return; // User is not in any groups
+  }
+
+  const groupIds = userGroups.map((ug) => ug.group_id);
+
+  // Update each group's members array
+  for (const groupId of groupIds) {
+    const group = await getGroup(groupId);
+    if (!group) continue;
+
+    // Check if user is the leader
+    const isLeader = group.leaderId === userId;
+
+    // Update member name in groups.members JSONB array
+    const updatedMembers = group.members.map((member) =>
+      member.uid === userId ? { ...member, name: newDisplayName } : member
+    );
+
+    // Prepare update object
+    const updateData: any = { members: updatedMembers };
+    
+    // If user is the leader, also update leader_name
+    if (isLeader) {
+      updateData.leader_name = newDisplayName;
+    }
+
+    const { error: updateError } = await supabase
+      .from('groups')
+      .update(updateData)
+      .eq('id', groupId);
+
+    if (updateError) {
+      console.error(`Error updating member name in group ${groupId}:`, updateError);
+      // Continue with other groups even if one fails
+    }
+
+    // Update user_name in group_members table
+    const { error: memberUpdateError } = await supabase
+      .from('group_members')
+      .update({ user_name: newDisplayName })
+      .eq('group_id', groupId)
+      .eq('user_id', userId);
+
+    if (memberUpdateError) {
+      console.error(`Error updating member name in group_members for group ${groupId}:`, memberUpdateError);
+      // Continue with other groups even if one fails
+    }
+  }
+}
+
+/**
  * Delete a group (only leader can delete)
  */
 export async function deleteGroup(groupId: string, userId: string): Promise<void> {

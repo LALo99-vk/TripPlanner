@@ -1,32 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Radio, Mic, MicOff, Volume2, VolumeX, Users, Wifi, WifiOff } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 import { VoiceMessage } from '../../types';
 import { useVoiceRecording } from '../../hooks/useVoiceRecording';
 
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
+
 const WalkieTalkiePage: React.FC = () => {
-  const [isConnected, setIsConnected] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
   const [volume, setVolume] = useState(80);
-  const [selectedChannel, setSelectedChannel] = useState('group-1');
-  const [messages, setMessages] = useState<VoiceMessage[]>([
-    {
-      id: '1',
-      from: 'Rahul',
-      to: 'Everyone',
-      audioUrl: '#',
-      duration: 3000,
-      timestamp: new Date(Date.now() - 300000),
-      isPlayed: true
-    },
-    {
-      id: '2',
-      from: 'Priya',
-      to: 'Everyone',
-      audioUrl: '#',
-      duration: 5000,
-      timestamp: new Date(Date.now() - 120000),
-      isPlayed: false
-    }
-  ]);
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [messages, setMessages] = useState<VoiceMessage[]>([]);
+  const socketRef = useRef<Socket | null>(null);
 
   const {
     isRecording,
@@ -43,21 +28,85 @@ const WalkieTalkiePage: React.FC = () => {
     { id: 'family', name: 'Family Channel', members: 8, active: 1 }
   ];
 
-  const sendVoiceMessage = () => {
-    if (audioUrl) {
-      const newMessage: VoiceMessage = {
-        id: Date.now().toString(),
-        from: 'You',
-        to: 'Everyone',
-        audioUrl: audioUrl,
-        duration: duration,
-        timestamp: new Date(),
-        isPlayed: false
-      };
-      
-      setMessages(prev => [newMessage, ...prev]);
-      clearRecording();
+  // Initialize Socket.io connection
+  useEffect(() => {
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+    });
+
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setIsConnected(true);
+      console.log('✅ Connected to Socket.io server');
+    });
+
+    socket.on('disconnect', () => {
+      setIsConnected(false);
+      console.log('❌ Disconnected from Socket.io server');
+    });
+
+    socket.on('voice-message-received', (message: VoiceMessage) => {
+      setMessages(prev => [message, ...prev]);
+    });
+
+    socket.on('voice-message-sent', (message: VoiceMessage) => {
+      setMessages(prev => [message, ...prev]);
+    });
+
+    socket.on('user-joined', (data: { userId: string; userName: string }) => {
+      console.log(`👤 ${data.userName} joined the channel`);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  const handleJoinChannel = (channelId: string) => {
+    if (!socketRef.current || !isConnected) {
+      alert('Not connected to server. Please wait...');
+      return;
     }
+
+    // Leave previous channel
+    if (selectedChannel) {
+      socketRef.current.emit('leave-channel', {
+        channelId: selectedChannel,
+        userId: 'current-user-id', // Replace with actual user ID from auth
+      });
+    }
+
+    // Join new channel
+    socketRef.current.emit('join-channel', {
+      channelId,
+      userId: 'current-user-id', // Replace with actual user ID from auth
+      userName: 'You', // Replace with actual user name from auth
+    });
+
+    setSelectedChannel(channelId);
+  };
+
+  const sendVoiceMessage = () => {
+    if (!audioUrl || !selectedChannel || !socketRef.current) {
+      alert('Please record a message and select a channel');
+      return;
+    }
+
+    // In a real app, you'd upload the audio file to storage first
+    // For now, we'll use the blob URL (this needs to be uploaded to Supabase Storage)
+    socketRef.current.emit('voice-message', {
+      channelId: selectedChannel,
+      userId: 'current-user-id', // Replace with actual user ID from auth
+      userName: 'You', // Replace with actual user name from auth
+      audioUrl: audioUrl, // This should be a public URL after upload
+      duration,
+    });
+
+    clearRecording();
   };
 
   const toggleRecording = () => {
@@ -128,7 +177,7 @@ const WalkieTalkiePage: React.FC = () => {
                   onMouseUp={() => isRecording && stopRecording()}
                   onTouchStart={toggleRecording}
                   onTouchEnd={() => isRecording && stopRecording()}
-                  disabled={!isConnected}
+                  disabled={!isConnected || !selectedChannel}
                   className={`w-32 h-32 rounded-full border-8 font-bold text-lg transition-all duration-200 ${
                     isRecording
                       ? 'bg-red-500 border-red-300 text-white scale-110 animate-pulse shadow-2xl'
@@ -247,7 +296,7 @@ const WalkieTalkiePage: React.FC = () => {
                 {channels.map((channel) => (
                   <button
                     key={channel.id}
-                    onClick={() => setSelectedChannel(channel.id)}
+                    onClick={() => handleJoinChannel(channel.id)}
                     className={`w-full p-4 rounded-xl text-left transition-all duration-200 ${
                       selectedChannel === channel.id
                         ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white'

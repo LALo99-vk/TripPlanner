@@ -31,8 +31,7 @@ const ChatPage: React.FC = () => {
     try {
       const response = await apiService.sendChatMessage(userMessage, 'Travel chat assistance');
       return response.response;
-    } catch (error) {
-      console.error('Failed to get AI response:', error);
+    } catch (error: any) {
       return "I'm sorry, I'm having trouble connecting right now. Please try again in a moment. 🤖";
     }
   };
@@ -99,7 +98,7 @@ const ChatPage: React.FC = () => {
             <Bot className="h-10 w-10 mr-3 text-primary" />
             🤖 AI Travel Assistant
           </h1>
-          <p className="text-xl text-secondary">
+          <p className="text-xl text-secondary mb-2">
             Your intelligent travel companion for exploring India
           </p>
         </div>

@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import OpenAI from 'openai';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 // Load environment variables
 // Try loading from server directory first, then root
@@ -9,6 +11,13 @@ dotenv.config({ path: '.env' });
 dotenv.config({ path: '../.env' });
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: '*', // In production, specify your frontend URLs
+    methods: ['GET', 'POST'],
+  },
+});
 const PORT = process.env.PORT || 3001;
 
 // Validate required environment variables
@@ -1657,10 +1666,77 @@ app.post('/api/bookings/select-hotel', async (req, res) => {
   }
 });
 
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log(`✅ Client connected: ${socket.id}`);
+
+  // Join a channel/group
+  socket.on('join-channel', (data: { channelId: string; userId: string; userName: string }) => {
+    socket.join(data.channelId);
+    console.log(`👤 ${data.userName} (${data.userId}) joined channel: ${data.channelId}`);
+    
+    // Notify others in the channel
+    socket.to(data.channelId).emit('user-joined', {
+      userId: data.userId,
+      userName: data.userName,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Leave a channel
+  socket.on('leave-channel', (data: { channelId: string; userId: string }) => {
+    socket.leave(data.channelId);
+    console.log(`👋 User ${data.userId} left channel: ${data.channelId}`);
+  });
+
+  // Send voice message
+  socket.on('voice-message', (data: {
+    channelId: string;
+    userId: string;
+    userName: string;
+    audioUrl: string;
+    duration: number;
+  }) => {
+    const message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      from: data.userName,
+      fromId: data.userId,
+      to: 'Everyone',
+      audioUrl: data.audioUrl,
+      duration: data.duration,
+      timestamp: new Date(),
+      channelId: data.channelId,
+    };
+
+    // Broadcast to all users in the channel (except sender)
+    socket.to(data.channelId).emit('voice-message-received', message);
+    
+    // Also send back to sender for confirmation
+    socket.emit('voice-message-sent', message);
+    
+    console.log(`📢 Voice message sent in channel ${data.channelId} by ${data.userName}`);
+  });
+
+  // Handle typing indicator (optional)
+  socket.on('typing', (data: { channelId: string; userId: string; userName: string }) => {
+    socket.to(data.channelId).emit('user-typing', {
+      userId: data.userId,
+      userName: data.userName,
+    });
+  });
+
+  // Handle disconnect
+  socket.on('disconnect', () => {
+    console.log(`❌ Client disconnected: ${socket.id}`);
+  });
+});
+
 // Start server
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`🚀 WanderWise API Server running on port ${PORT}`);
+  console.log(`🔌 Socket.io server ready for real-time communication`);
   console.log(`🤖 OpenAI integration: ${process.env.OPENAI_API_KEY ? 'Connected' : 'Not configured'}`);
 });
 
 export default app;
+export { io };

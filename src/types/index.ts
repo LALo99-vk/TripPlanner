@@ -1,3 +1,7 @@
+// Re-export from shared types
+export * from '../../../shared/types';
+
+// Keep web-specific types here if needed
 export interface User {
   id: string;
   email: string;

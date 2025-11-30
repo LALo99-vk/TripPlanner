@@ -8,10 +8,19 @@
     "turnon": "concurrently \"npm run server\" \"npm run dev\"",
     "server": "cd server && npm run dev",
     "build": "vite build",
+    "build:android": "npm run build && npx cap sync android && npx cap open android",
+    "build:ios": "npm run build && npx cap sync ios && npx cap open ios",
+    "sync": "npm run build && npx cap sync",
+    "android": "npx cap open android",
+    "ios": "npx cap open ios",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^7.4.4",
+    "@capacitor/cli": "^7.4.4",
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/ios": "^7.4.4",
     "@react-google-maps/api": "^2.20.7",
     "@splinetool/react-spline": "^4.1.0",
     "@splinetool/runtime": "^1.10.80",
@@ -31,6 +40,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-map-gl": "^8.1.0",
+    "socket.io-client": "^4.8.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
