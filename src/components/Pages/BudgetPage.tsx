@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { PlusCircle, DollarSign, TrendingUp, PieChart, Download, Share, Wallet, MapPin, Calendar, Crown, Brain, Users, X, Lock, Unlock, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { apiService } from '../../services/api';
+import { jsPDF } from 'jspdf';
+import { sendMessage } from '../../services/chatRepository';
 import {
   addGroupExpense,
   ensureGroupMemberRecords,
@@ -72,6 +74,8 @@ const BudgetPage: React.FC = () => {
   const [savingCategories, setSavingCategories] = useState(false);
   const [showAiSyncConfirm, setShowAiSyncConfirm] = useState(false);
   const [editingSingleCategory, setEditingSingleCategory] = useState<{ category: string; budget: string; color: string; description?: string } | null>(null);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
   const [newExpense, setNewExpense] = useState<NewExpenseFormState>({
     category: '',
     amount: '',
@@ -577,6 +581,238 @@ const BudgetPage: React.FC = () => {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
+  };
+
+  // Export PDF Report
+  const handleExportPDF = async () => {
+    if (!group || !budget) {
+      showToast('No group or budget data available to export', 'error');
+      return;
+    }
+
+    setIsExportingPDF(true);
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      let yPos = 20;
+      const margin = 15;
+      const lineHeight = 7;
+      const maxWidth = pageWidth - (margin * 2);
+
+      // Helper function to add a new page if needed
+      const checkNewPage = (requiredSpace: number) => {
+        if (yPos + requiredSpace > pageHeight - margin) {
+          doc.addPage();
+          yPos = margin;
+        }
+      };
+
+      // Title
+      doc.setFontSize(20);
+      doc.setTextColor(255, 255, 255);
+      doc.setFillColor(0, 0, 0);
+      doc.rect(0, 0, pageWidth, 30, 'F');
+      doc.text('Budget Report', margin, yPos + 10);
+      yPos = 35;
+
+      // Group Info
+      doc.setFontSize(14);
+      doc.setTextColor(0, 0, 0);
+      const groupNameLines = doc.splitTextToSize(`Group: ${group.groupName}`, maxWidth);
+      doc.text(groupNameLines, margin, yPos);
+      yPos += groupNameLines.length * lineHeight;
+      doc.setFontSize(10);
+      doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, margin, yPos);
+      yPos += lineHeight * 2;
+
+      // Budget Summary
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Budget Summary', margin, yPos);
+      yPos += lineHeight;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.text(`Total Budget: ₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, margin, yPos);
+      yPos += lineHeight;
+      doc.text(`Total Spent: ₹${totalSpent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, margin, yPos);
+      yPos += lineHeight;
+      doc.text(`Remaining: ₹${remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, margin, yPos);
+      yPos += lineHeight * 2;
+
+      // Category Breakdown
+      if (categoryAggregates.length > 0) {
+        checkNewPage(lineHeight * (categoryAggregates.length + 3));
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Category Breakdown', margin, yPos);
+        yPos += lineHeight;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        categoryAggregates.forEach((cat) => {
+          checkNewPage(lineHeight * 2);
+          const percentage = cat.budgeted > 0 ? ((cat.spent / cat.budgeted) * 100).toFixed(1) : '0.0';
+          const categoryText = `${cat.category}: ₹${cat.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })} / ₹${cat.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${percentage}%)`;
+          const lines = doc.splitTextToSize(categoryText, maxWidth);
+          doc.text(lines, margin, yPos);
+          yPos += lines.length * lineHeight;
+        });
+        yPos += lineHeight;
+      }
+
+      // Member Budget Shares
+      if (memberBudgetShares.length > 0) {
+        checkNewPage(lineHeight * (memberBudgetShares.length + 3));
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Member Budget Shares', margin, yPos);
+        yPos += lineHeight;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        memberBudgetShares.forEach((member) => {
+          checkNewPage(lineHeight * 2);
+          const memberText = `${member.userName}: ₹${member.budgetShare.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (Spent: ₹${member.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}, Remaining: ₹${member.remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`;
+          const lines = doc.splitTextToSize(memberText, maxWidth);
+          doc.text(lines, margin, yPos);
+          yPos += lines.length * lineHeight;
+        });
+        yPos += lineHeight;
+      }
+
+      // Settlement Data
+      if (settlementData.length > 0) {
+        checkNewPage(lineHeight * (settlementData.length + 3));
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Settlement Summary', margin, yPos);
+        yPos += lineHeight;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        settlementData.forEach((member) => {
+          checkNewPage(lineHeight * 2);
+          const settlementText = member.finalSettlement >= 0 ? 'receives' : 'pays';
+          const settlementLine = `${member.userName}: ${settlementText} ₹${Math.abs(member.finalSettlement).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const lines = doc.splitTextToSize(settlementLine, maxWidth);
+          doc.text(lines, margin, yPos);
+          yPos += lines.length * lineHeight;
+        });
+        yPos += lineHeight;
+      }
+
+      // Expenses List
+      if (expenses.length > 0) {
+        checkNewPage(lineHeight * (expenses.length + 3));
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Recent Expenses', margin, yPos);
+        yPos += lineHeight;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        expenses.slice(0, 20).forEach((expense) => {
+          checkNewPage(lineHeight * 3);
+          const expenseText = `${expense.description} - ₹${expense.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const expenseLines = doc.splitTextToSize(expenseText, maxWidth);
+          doc.text(expenseLines, margin, yPos);
+          yPos += expenseLines.length * (lineHeight * 0.7);
+          const categoryText = `Category: ${expense.category} | Paid by: ${expense.paidBy}`;
+          const categoryLines = doc.splitTextToSize(categoryText, maxWidth);
+          doc.text(categoryLines, margin, yPos);
+          yPos += categoryLines.length * (lineHeight * 0.7);
+          doc.text(`Date: ${new Date(expense.date).toLocaleDateString('en-IN')}`, margin, yPos);
+          yPos += lineHeight;
+        });
+        if (expenses.length > 20) {
+          doc.text(`... and ${expenses.length - 20} more expenses`, margin, yPos);
+        }
+      }
+
+      // Save PDF
+      const fileName = `${group.groupName.replace(/[^a-z0-9]/gi, '_')}_Budget_Report_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+      showToast('PDF report exported successfully!', 'success');
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Unknown error';
+      showToast(`Failed to export PDF: ${errorMessage}`, 'error');
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  // Share with Group
+  const handleShareWithGroup = async () => {
+    if (!group || !budget || !user || !groupId) {
+      showToast('No group or budget data available to share', 'error');
+      return;
+    }
+
+    setIsSharing(true);
+    try {
+      // Format budget data as a message
+      let message = `💰 *Budget Report for ${group.groupName}*\n\n`;
+      
+      // Budget Summary
+      message += `📊 *Budget Summary*\n`;
+      message += `Total Budget: ₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n`;
+      message += `Total Spent: ₹${totalSpent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n`;
+      message += `Remaining: ₹${remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n\n`;
+
+      // Category Breakdown
+      if (categoryAggregates.length > 0) {
+        message += `📋 *Category Breakdown*\n`;
+        categoryAggregates.forEach((cat) => {
+          const percentage = cat.budgeted > 0 ? ((cat.spent / cat.budgeted) * 100).toFixed(1) : '0.0';
+          message += `${cat.category}: ₹${cat.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })} / ₹${cat.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${percentage}%)\n`;
+        });
+        message += `\n`;
+      }
+
+      // Member Budget Shares
+      if (memberBudgetShares.length > 0) {
+        message += `👥 *Member Budget Shares*\n`;
+        memberBudgetShares.forEach((member) => {
+          message += `${member.userName}: ₹${member.budgetShare.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (Spent: ₹${member.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}, Remaining: ₹${member.remaining.toLocaleString('en-IN', { minimumFractionDigits: 2 })})\n`;
+        });
+        message += `\n`;
+      }
+
+      // Settlement Summary
+      if (settlementData.length > 0) {
+        message += `💸 *Settlement Summary*\n`;
+        settlementData.forEach((member) => {
+          const settlementText = member.finalSettlement >= 0 ? 'receives' : 'pays';
+          message += `${member.userName}: ${settlementText} ₹${Math.abs(member.finalSettlement).toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n`;
+        });
+        message += `\n`;
+      }
+
+      // Recent Expenses
+      if (expenses.length > 0) {
+        message += `📝 *Recent Expenses*\n`;
+        expenses.slice(0, 10).forEach((expense) => {
+          message += `• ${expense.description} - ₹${expense.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${expense.category}, paid by ${expense.paidBy})\n`;
+        });
+        if (expenses.length > 10) {
+          message += `... and ${expenses.length - 10} more expenses\n`;
+        }
+      }
+
+      message += `\n_Generated on ${new Date().toLocaleString('en-IN')}_`;
+
+      // Send message to group chat
+      await sendMessage(groupId, user.uid, user.displayName || 'User', {
+        text: message,
+      });
+
+      showToast('Budget report shared with group successfully!', 'success');
+    } catch (error: any) {
+      showToast('Failed to share budget report. Please try again.', 'error');
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   // Handle lock/unlock category with confirmation
@@ -2330,13 +2566,39 @@ const BudgetPage: React.FC = () => {
               <div className="glass-card p-6">
                 <h3 className="text-lg font-bold text-primary mb-4">Export & Share</h3>
                 <div className="space-y-3">
-                  <button className="w-full flex items-center justify-center py-3 px-4 premium-button-secondary rounded-xl">
-                    <Download className="h-5 w-5 mr-2 text-secondary" />
-                    Export PDF Report
+                  <button
+                    onClick={handleExportPDF}
+                    disabled={isExportingPDF || !group || !budget}
+                    className="w-full flex items-center justify-center py-3 px-4 premium-button-secondary rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isExportingPDF ? (
+                      <>
+                        <Loader2 className="h-5 w-5 mr-2 text-secondary animate-spin" />
+                        Exporting...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-5 w-5 mr-2 text-secondary" />
+                        Export PDF Report
+                      </>
+                    )}
                   </button>
-                  <button className="w-full flex items-center justify-center py-3 px-4 premium-button-secondary rounded-xl">
-                    <Share className="h-5 w-5 mr-2 text-secondary" />
-                    Share with Group
+                  <button
+                    onClick={handleShareWithGroup}
+                    disabled={isSharing || !group || !budget || !groupId}
+                    className="w-full flex items-center justify-center py-3 px-4 premium-button-secondary rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSharing ? (
+                      <>
+                        <Loader2 className="h-5 w-5 mr-2 text-secondary animate-spin" />
+                        Sharing...
+                      </>
+                    ) : (
+                      <>
+                        <Share className="h-5 w-5 mr-2 text-secondary" />
+                        Share with Group
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
