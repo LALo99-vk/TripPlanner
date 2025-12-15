@@ -11,6 +11,7 @@ import {
   Clock,
   Star,
   ArrowRight,
+  Search,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { getUserGroups, getGroup, type Group } from '../../services/groupRepository';
@@ -48,10 +49,16 @@ interface HotelOption {
   name: string;
   location: string;
   rating?: number;
+  reviewCount?: number;
   pricePerNight?: number;
   currency?: string;
   imageUrl?: string;
-  bookingSource: 'amadeus' | 'booking';
+  distance?: number;
+  distanceUnit?: string;
+  amenities?: string[];
+  address?: string;
+  district?: string;
+  bookingSource: 'amadeus' | 'booking' | 'stayapi';
 }
 
 type SortOption = 'cheapest' | 'fastest' | 'morning' | 'evening' | 'top-rated' | 'closest';
@@ -88,6 +95,21 @@ const BookingPage: React.FC = () => {
   const [selectedTrain, setSelectedTrain] = useState<string | null>(null);
   const [selectedHotel, setSelectedHotel] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [hotelSearchLocation, setHotelSearchLocation] = useState<string>('');
+  const [isSearchingHotels, setIsSearchingHotels] = useState(false);
+  const [universalSearch, setUniversalSearch] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<'flights' | 'trains' | 'hotels'>('flights');
+  const [searchResults, setSearchResults] = useState<{
+    flights: FlightOption[];
+    trains: TrainOption[];
+    hotels: HotelOption[];
+  }>({
+    flights: [],
+    trains: [],
+    hotels: [],
+  });
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearchedHotels, setHasSearchedHotels] = useState(false);
   const [sortOptions, setSortOptions] = useState({
     flights: 'cheapest' as SortOption,
     trains: 'cheapest' as SortOption,
@@ -179,7 +201,7 @@ const BookingPage: React.FC = () => {
         if (data.success) {
           setFlights(data.data || []);
         } else {
-          setErrors((prev) => ({ ...prev, flights: data.message || 'Failed to fetch flights' }));
+          setErrors((prev) => ({ ...prev, flights: data.message || data.error || 'Failed to fetch flights' }));
         }
       } catch (error) {
         console.error('Error fetching flights:', error);
@@ -203,7 +225,7 @@ const BookingPage: React.FC = () => {
         if (data.success) {
           setTrains(data.data || []);
         } else {
-          setErrors((prev) => ({ ...prev, trains: data.message || 'Failed to fetch trains' }));
+          setErrors((prev) => ({ ...prev, trains: data.message || data.error || 'Failed to fetch trains' }));
         }
       } catch (error) {
         console.error('Error fetching trains:', error);
@@ -215,31 +237,7 @@ const BookingPage: React.FC = () => {
         setLoading((prev) => ({ ...prev, trains: false }));
       }
 
-      // Fetch hotels
-      setLoading((prev) => ({ ...prev, hotels: true }));
-      setErrors((prev) => ({ ...prev, hotels: '' }));
-      try {
-        const checkOutDate = new Date(planData.travelDate);
-        checkOutDate.setDate(checkOutDate.getDate() + 1);
-        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
-        const response = await fetch(
-          `${API_BASE_URL}/hotels/search?location=${encodeURIComponent(planData.destination)}&checkIn=${planData.travelDate}&checkOut=${checkOutDate.toISOString().split('T')[0]}&travellers=${planData.travellersCount}`
-        );
-        const data = await response.json();
-        if (data.success) {
-          setHotels(data.data || []);
-        } else {
-          setErrors((prev) => ({ ...prev, hotels: data.message || 'Failed to fetch hotels' }));
-        }
-      } catch (error) {
-        console.error('Error fetching hotels:', error);
-        const errorMessage = error instanceof TypeError && error.message.includes('Failed to fetch')
-          ? 'Backend server is not running. Please start the server on port 3001.'
-          : 'Failed to fetch hotels';
-        setErrors((prev) => ({ ...prev, hotels: errorMessage }));
-      } finally {
-        setLoading((prev) => ({ ...prev, hotels: false }));
-      }
+      // Don't auto-fetch hotels - user must search manually
 
       setLastUpdated(new Date());
     };
@@ -270,15 +268,7 @@ const BookingPage: React.FC = () => {
         })
         .catch(console.error);
 
-      // Re-fetch hotels
-      const checkOutDate = new Date(planData.travelDate);
-      checkOutDate.setDate(checkOutDate.getDate() + 1);
-      fetch(`${API_BASE_URL}/hotels/search?location=${encodeURIComponent(planData.destination)}&checkIn=${planData.travelDate}&checkOut=${checkOutDate.toISOString().split('T')[0]}&travellers=${planData.travellersCount}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) setHotels(data.data || []);
-        })
-        .catch(console.error);
+      // Hotels are now manually searched, so skip auto-refresh
 
       setLastUpdated(new Date());
     }, 15 * 60 * 1000); // 15 minutes
@@ -286,9 +276,22 @@ const BookingPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [planData]);
 
+  // Determine which data to show (search results or auto-fetched)
+  const flightsToShow = useMemo(() => {
+    return searchResults.flights.length > 0 ? searchResults.flights : flights;
+  }, [searchResults.flights, flights]);
+
+  const trainsToShow = useMemo(() => {
+    return searchResults.trains.length > 0 ? searchResults.trains : trains;
+  }, [searchResults.trains, trains]);
+
+  const hotelsToShow = useMemo(() => {
+    return searchResults.hotels.length > 0 ? searchResults.hotels : hotels;
+  }, [searchResults.hotels, hotels]);
+
   // Sorted results
   const sortedFlights = useMemo(() => {
-    let sorted = [...flights];
+    let sorted = [...flightsToShow];
     switch (sortOptions.flights) {
       case 'cheapest':
         sorted = sorted.sort((a, b) => a.price - b.price);
@@ -323,7 +326,7 @@ const BookingPage: React.FC = () => {
   }, [sortedFlights, displayLimit.flights]);
 
   const sortedTrains = useMemo(() => {
-    let sorted = [...trains];
+    let sorted = [...trainsToShow];
     switch (sortOptions.trains) {
       case 'cheapest':
         sorted = sorted.sort((a, b) => (a.price || 0) - (b.price || 0));
@@ -346,7 +349,7 @@ const BookingPage: React.FC = () => {
   }, [sortedTrains, displayLimit.trains]);
 
   const sortedHotels = useMemo(() => {
-    let sorted = [...hotels];
+    let sorted = [...hotelsToShow];
     switch (sortOptions.hotels) {
       case 'cheapest':
         sorted = sorted.sort((a, b) => (a.pricePerNight || 0) - (b.pricePerNight || 0));
@@ -417,6 +420,165 @@ const BookingPage: React.FC = () => {
       });
     } catch (error) {
       console.error('Error saving train selection:', error);
+    }
+  };
+
+  // Parse search input to determine if it's a route or location
+  const parseSearchInput = (input: string): { type: 'route' | 'location'; origin?: string; destination?: string; location?: string } => {
+    const trimmed = input.trim();
+    
+    // Check for route patterns: "A → B", "A to B", "A-B"
+    const routePatterns = [
+      /(.+?)\s*→\s*(.+)/,
+      /(.+?)\s+to\s+(.+)/i,
+      /(.+?)\s*-\s*(.+)/,
+    ];
+    
+    for (const pattern of routePatterns) {
+      const match = trimmed.match(pattern);
+      if (match) {
+        return {
+          type: 'route',
+          origin: match[1].trim(),
+          destination: match[2].trim(),
+        };
+      }
+    }
+    
+    // Otherwise, treat as location
+    return {
+      type: 'location',
+      location: trimmed,
+    };
+  };
+
+  // Handle universal search
+  const handleUniversalSearch = async () => {
+    if (!universalSearch.trim()) {
+      return;
+    }
+
+    setIsSearching(true);
+    const parsed = parseSearchInput(universalSearch);
+
+    try {
+      if (parsed.type === 'route') {
+        // Route search - search flights and trains
+        if (activeTab === 'flights' || activeTab === 'trains') {
+          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+          const date = planData?.travelDate || new Date().toISOString().split('T')[0];
+          const travellers = planData?.travellersCount || 1;
+
+          if (activeTab === 'flights') {
+            setLoading((prev) => ({ ...prev, flights: true }));
+            setErrors((prev) => ({ ...prev, flights: '' }));
+            try {
+              const response = await fetch(
+                `${API_BASE_URL}/flights/search?source=${encodeURIComponent(parsed.origin!)}&destination=${encodeURIComponent(parsed.destination!)}&date=${date}&travellers=${travellers}`
+              );
+              const data = await response.json();
+              if (data.success) {
+                setSearchResults((prev) => ({ ...prev, flights: data.data || [] }));
+              } else {
+                setErrors((prev) => ({ ...prev, flights: data.message || 'Failed to fetch flights' }));
+              }
+            } catch (error) {
+              console.error('Error fetching flights:', error);
+              setErrors((prev) => ({ ...prev, flights: 'Failed to fetch flights' }));
+            } finally {
+              setLoading((prev) => ({ ...prev, flights: false }));
+            }
+          } else if (activeTab === 'trains') {
+            setLoading((prev) => ({ ...prev, trains: true }));
+            setErrors((prev) => ({ ...prev, trains: '' }));
+            try {
+              const response = await fetch(
+                `${API_BASE_URL}/trains/search?source=${encodeURIComponent(parsed.origin!)}&destination=${encodeURIComponent(parsed.destination!)}&date=${date}&travellers=${travellers}`
+              );
+              const data = await response.json();
+              if (data.success) {
+                setSearchResults((prev) => ({ ...prev, trains: data.data || [] }));
+              } else {
+                setErrors((prev) => ({ ...prev, trains: data.message || 'Failed to fetch trains' }));
+              }
+            } catch (error) {
+              console.error('Error fetching trains:', error);
+              setErrors((prev) => ({ ...prev, trains: 'Failed to fetch trains' }));
+            } finally {
+              setLoading((prev) => ({ ...prev, trains: false }));
+            }
+          }
+        }
+      } else {
+        // Location search - search hotels
+        if (activeTab === 'hotels' && planData) {
+          setLoading((prev) => ({ ...prev, hotels: true }));
+          setErrors((prev) => ({ ...prev, hotels: '' }));
+          try {
+            const checkOutDate = new Date(planData.travelDate);
+            checkOutDate.setDate(checkOutDate.getDate() + 1);
+            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+            const response = await fetch(
+              `${API_BASE_URL}/hotels/search?location=${encodeURIComponent(parsed.location!)}&checkIn=${planData.travelDate}&checkOut=${checkOutDate.toISOString().split('T')[0]}&travellers=${planData.travellersCount}`
+            );
+            const data = await response.json();
+            if (data.success) {
+              setSearchResults((prev) => ({ ...prev, hotels: data.data || [] }));
+              setHasSearchedHotels(true);
+            } else {
+              setErrors((prev) => ({ ...prev, hotels: data.error || data.message || 'Failed to fetch hotels' }));
+              setHasSearchedHotels(true);
+            }
+          } catch (error) {
+            console.error('Error fetching hotels:', error);
+            setErrors((prev) => ({ ...prev, hotels: 'Failed to fetch hotels' }));
+          } finally {
+            setLoading((prev) => ({ ...prev, hotels: false }));
+          }
+        }
+      }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSearchHotels = async () => {
+    if (!hotelSearchLocation.trim() || !planData) {
+      setErrors((prev) => ({ ...prev, hotels: 'Please enter a location to search' }));
+      return;
+    }
+
+    setIsSearchingHotels(true);
+    setLoading((prev) => ({ ...prev, hotels: true }));
+    setErrors((prev) => ({ ...prev, hotels: '' }));
+
+    try {
+      const checkOutDate = new Date(planData.travelDate);
+      checkOutDate.setDate(checkOutDate.getDate() + 1);
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+      const response = await fetch(
+        `${API_BASE_URL}/hotels/search?location=${encodeURIComponent(hotelSearchLocation.trim())}&checkIn=${planData.travelDate}&checkOut=${checkOutDate.toISOString().split('T')[0]}&travellers=${planData.travellersCount}`
+      );
+      const data = await response.json();
+      if (data.success) {
+        setHotels(data.data || []);
+        setLastUpdated(new Date());
+        setHasSearchedHotels(true);
+      } else {
+        setErrors((prev) => ({ ...prev, hotels: data.error || data.message || 'Failed to fetch hotels' }));
+        setHotels([]);
+        setHasSearchedHotels(true);
+      }
+    } catch (error) {
+      console.error('Error fetching hotels:', error);
+      const errorMessage = error instanceof TypeError && error.message.includes('Failed to fetch')
+        ? 'Backend server is not running. Please start the server on port 3001.'
+        : 'Failed to fetch hotels';
+      setErrors((prev) => ({ ...prev, hotels: errorMessage }));
+      setHotels([]);
+    } finally {
+      setLoading((prev) => ({ ...prev, hotels: false }));
+      setIsSearchingHotels(false);
     }
   };
 
@@ -529,6 +691,93 @@ const BookingPage: React.FC = () => {
           </div>
         )}
 
+        {/* Universal Search Bar */}
+        {planData && (
+          <div className="glass-card p-6">
+            <h2 className="text-xl font-bold text-white mb-4">Search Travel Options</h2>
+            <div className="mb-4">
+              <div className="flex gap-3">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/70" />
+                  <input
+                    type="text"
+                    value={universalSearch}
+                    onChange={(e) => {
+                      setUniversalSearch(e.target.value);
+                      // Clear search results when input is cleared
+                      if (!e.target.value.trim()) {
+                        setSearchResults({ flights: [], trains: [], hotels: [] });
+                        if (activeTab === 'hotels') {
+                          setHasSearchedHotels(false);
+                        }
+                      }
+                    }}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleUniversalSearch();
+                      }
+                    }}
+                    placeholder="Search flights, trains or hotels (e.g., Goa, Delhi, Dubai or Mumbai → Goa)"
+                    className="w-full glass-input pl-10 pr-4 py-3 rounded-lg text-white placeholder-white/50"
+                    disabled={isSearching}
+                  />
+                </div>
+                <button
+                  onClick={handleUniversalSearch}
+                  disabled={isSearching || !universalSearch.trim()}
+                  className="premium-button-primary px-6 py-3 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isSearching ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Searching...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Search className="w-4 h-4" />
+                      <span>Search</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+            
+            {/* Tabs */}
+            <div className="flex gap-2 border-b border-white/10">
+              <button
+                onClick={() => setActiveTab('flights')}
+                className={`px-4 py-2 font-semibold transition-all ${
+                  activeTab === 'flights'
+                    ? 'text-white border-b-2 border-emerald-400'
+                    : 'text-white/70 hover:text-white'
+                }`}
+              >
+                Flights
+              </button>
+              <button
+                onClick={() => setActiveTab('trains')}
+                className={`px-4 py-2 font-semibold transition-all ${
+                  activeTab === 'trains'
+                    ? 'text-white border-b-2 border-emerald-400'
+                    : 'text-white/70 hover:text-white'
+                }`}
+              >
+                Trains
+              </button>
+              <button
+                onClick={() => setActiveTab('hotels')}
+                className={`px-4 py-2 font-semibold transition-all ${
+                  activeTab === 'hotels'
+                    ? 'text-white border-b-2 border-emerald-400'
+                    : 'text-white/70 hover:text-white'
+                }`}
+              >
+                Hotels
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Flights Section */}
         <div className="glass-card p-6">
               <div className="flex items-center justify-between mb-4">
@@ -560,7 +809,13 @@ const BookingPage: React.FC = () => {
               <p className="text-red-400">{errors.flights}</p>
             </div>
           ) : sortedFlights.length === 0 ? (
-            <p className="text-white/70 text-center py-8">No flights found</p>
+            <p className="text-white/70 text-center py-8">
+              {searchResults.flights.length > 0 
+                ? 'No flights found for your search' 
+                : planData 
+                  ? 'No flights found for this route. Try adjusting your search or date.' 
+                  : 'No flights found. Select a group to auto-fetch flights.'}
+            </p>
           ) : (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -664,7 +919,13 @@ const BookingPage: React.FC = () => {
               <p className="text-red-400">{errors.trains}</p>
             </div>
           ) : sortedTrains.length === 0 ? (
-            <p className="text-white/70 text-center py-8">No trains found</p>
+            <p className="text-white/70 text-center py-8">
+              {searchResults.trains.length > 0 
+                ? 'No trains found for your search' 
+                : planData 
+                  ? 'No trains found for this route. Try adjusting your search or date.' 
+                  : 'No trains found. Select a group to auto-fetch trains.'}
+            </p>
           ) : (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -747,97 +1008,192 @@ const BookingPage: React.FC = () => {
               <Building2 className="w-6 h-6 text-white" />
               <h2 className="text-2xl font-bold text-white">Hotels</h2>
             </div>
-            <select
-              value={sortOptions.hotels}
-              onChange={(e) => {
-                setSortOptions((prev) => ({ ...prev, hotels: e.target.value as SortOption }));
-                setDisplayLimit((prev) => ({ ...prev, hotels: 4 })); // Reset to 4 when filter changes
-              }}
-              className="glass-input px-3 py-2 rounded-lg text-white text-sm"
-            >
-              <option value="top-rated">Top-rated</option>
-              <option value="cheapest">Cheapest</option>
-              <option value="closest">Closest to center</option>
-            </select>
+            {hotels.length > 0 && (
+              <select
+                value={sortOptions.hotels}
+                onChange={(e) => {
+                  setSortOptions((prev) => ({ ...prev, hotels: e.target.value as SortOption }));
+                  setDisplayLimit((prev) => ({ ...prev, hotels: 4 })); // Reset to 4 when filter changes
+                }}
+                className="glass-input px-3 py-2 rounded-lg text-white text-sm"
+              >
+                <option value="top-rated">Top-rated</option>
+                <option value="cheapest">Cheapest</option>
+                <option value="closest">Closest to center</option>
+              </select>
+            )}
+          </div>
+
+          {/* Hotel Search Input */}
+          {planData && (
+            <div className="mb-6">
+              <div className="flex gap-3">
+                <div className="flex-1 relative">
+                  <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/70" />
+                  <input
+                    type="text"
+                    value={hotelSearchLocation}
+                    onChange={(e) => setHotelSearchLocation(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSearchHotels();
+                      }
+                    }}
+                    placeholder="Enter city or destination (e.g., Goa, Mumbai, Dubai)"
+                    className="w-full glass-input pl-10 pr-4 py-3 rounded-lg text-white placeholder-white/50"
+                    disabled={loading.hotels || !planData}
+                  />
+                </div>
+                <button
+                  onClick={handleSearchHotels}
+                  disabled={loading.hotels || !planData || !hotelSearchLocation.trim()}
+                  className="premium-button-primary px-6 py-3 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {loading.hotels ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Searching...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Search className="w-4 h-4" />
+                      <span>Search</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              {lastUpdated && hotels.length > 0 && (
+                <div className="mt-2 flex items-center space-x-2 text-white/70 text-sm">
+                  <Clock className="w-4 h-4" />
+                  <span>Updated {formatTimeAgo(lastUpdated)}</span>
+                </div>
+              )}
             </div>
+          )}
 
           {loading.hotels ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-8 h-8 text-white animate-spin" />
-              </div>
+            </div>
           ) : errors.hotels ? (
             <div className="glass-card p-4 border border-red-500/50">
               <p className="text-red-400">{errors.hotels}</p>
             </div>
+          ) : !planData ? (
+            <p className="text-white/70 text-center py-8">Please select a group to search for hotels</p>
           ) : sortedHotels.length === 0 ? (
-            <p className="text-white/70 text-center py-8">No hotels found</p>
+            <p className="text-white/70 text-center py-8">
+              {isSearching || loading.hotels 
+                ? 'Searching...' 
+                : hasSearchedHotels
+                  ? 'No hotels found for your search' 
+                  : 'Enter a location above to search for hotels'}
+            </p>
           ) : (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {displayedHotels.map((hotel) => (
-                <div
-                  key={hotel.id}
-                  className={`glass-card overflow-hidden border transition-all ${
-                    selectedHotel === hotel.id
-                      ? 'border-emerald-400/60 shadow-lg shadow-emerald-500/20'
-                      : 'border-white/5 hover:border-white/20'
-                  }`}
-                >
-                  {hotel.imageUrl && (
-                    <div
-                      className="h-40 w-full bg-cover bg-center"
-                      style={{ backgroundImage: `url(${hotel.imageUrl})` }}
-                    />
-                  )}
-                  <div className="p-5">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1">
-                        <h3 className="text-white font-semibold text-lg mb-1">{hotel.name}</h3>
-                        <p className="text-white/70 text-sm mb-2">{hotel.location}</p>
-                        {hotel.rating && (
-                          <div className="flex items-center space-x-1">
-                            <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                            <span className="text-white text-sm">{hotel.rating}</span>
+                  <div
+                    key={hotel.id}
+                    className={`glass-card overflow-hidden border transition-all ${
+                      selectedHotel === hotel.id
+                        ? 'border-emerald-400/60 shadow-lg shadow-emerald-500/20'
+                        : 'border-white/5 hover:border-white/20'
+                    }`}
+                  >
+                    {hotel.imageUrl && (
+                      <div
+                        className="h-48 w-full bg-cover bg-center relative"
+                        style={{ backgroundImage: `url(${hotel.imageUrl})` }}
+                      >
+                        {hotel.distance !== undefined && (
+                          <div className="absolute top-2 right-2 glass-card px-2 py-1 rounded text-xs text-white">
+                            {hotel.distance.toFixed(1)} {hotel.distanceUnit || 'km'} from center
                           </div>
-                )}
-              </div>
-                      {hotel.pricePerNight && (
-                        <div className="text-right">
-                          <p className="text-white font-bold text-xl">₹{hotel.pricePerNight.toLocaleString()}</p>
-                          <p className="text-white/70 text-xs">per night</p>
+                        )}
+                      </div>
+                    )}
+                    <div className="p-5">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <h3 className="text-white font-semibold text-lg mb-1">{hotel.name}</h3>
+                          {hotel.address && (
+                            <p className="text-white/70 text-sm mb-1">{hotel.address}</p>
+                          )}
+                          {hotel.district && (
+                            <p className="text-white/60 text-xs mb-2">{hotel.district}</p>
+                          )}
+                          <div className="flex items-center gap-3 mb-2">
+                            {hotel.rating && (
+                              <div className="flex items-center space-x-1">
+                                <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
+                                <span className="text-white text-sm font-medium">{hotel.rating.toFixed(1)}</span>
+                                {hotel.reviewCount && (
+                                  <span className="text-white/70 text-xs ml-1">
+                                    ({hotel.reviewCount.toLocaleString()} {hotel.reviewCount === 1 ? 'review' : 'reviews'})
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          {hotel.amenities && hotel.amenities.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              {hotel.amenities.slice(0, 3).map((amenity, idx) => (
+                                <span
+                                  key={idx}
+                                  className="text-xs text-white/70 bg-white/10 px-2 py-1 rounded"
+                                >
+                                  {amenity}
+                                </span>
+                              ))}
+                              {hotel.amenities.length > 3 && (
+                                <span className="text-xs text-white/70 bg-white/10 px-2 py-1 rounded">
+                                  +{hotel.amenities.length - 3} more
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
-            </div>
-                    <button
-                      onClick={() => handleSelectHotel(hotel)}
-                      className={`w-full py-2 px-4 rounded-lg font-semibold transition-all ${
-                        selectedHotel === hotel.id
-                          ? 'bg-emerald-500 text-white'
-                          : 'premium-button-primary'
-                      }`}
-                    >
-                      {selectedHotel === hotel.id ? (
-                        <span className="flex items-center justify-center space-x-2">
-                          <Check className="w-4 h-4" />
-                          <span>Selected</span>
-                        </span>
-                      ) : (
-                        'Select Hotel'
-                      )}
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
+                        {hotel.pricePerNight && (
+                          <div className="text-right ml-4">
+                            <p className="text-white font-bold text-xl">
+                              {hotel.currency === 'USD' ? '$' : hotel.currency === 'EUR' ? '€' : '₹'}
+                              {hotel.pricePerNight.toLocaleString()}
+                            </p>
+                            <p className="text-white/70 text-xs">per night</p>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleSelectHotel(hotel)}
+                        className={`w-full py-2 px-4 rounded-lg font-semibold transition-all ${
+                          selectedHotel === hotel.id
+                            ? 'bg-emerald-500 text-white'
+                            : 'premium-button-primary'
+                        }`}
+                      >
+                        {selectedHotel === hotel.id ? (
+                          <span className="flex items-center justify-center space-x-2">
+                            <Check className="w-4 h-4" />
+                            <span>Selected</span>
+                          </span>
+                        ) : (
+                          'Select Hotel'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
               {sortedHotels.length > displayLimit.hotels && (
                 <div className="mt-4 text-center">
-                <button
+                  <button
                     onClick={() => setDisplayLimit((prev) => ({ ...prev, hotels: Math.min(prev.hotels + 4, sortedHotels.length) }))}
                     className="premium-button-secondary px-6 py-2"
                   >
                     Load More ({sortedHotels.length - displayLimit.hotels} more available)
-            </button>
-          </div>
+                  </button>
+                </div>
               )}
             </>
           )}
