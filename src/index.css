@@ -167,3 +167,236 @@ body {
   backface-visibility: hidden;
   perspective: 1000px;
 }
+
+/* ========================================
+   MOBILE & CAPACITOR OPTIMIZATIONS
+   ======================================== */
+
+@layer utilities {
+  /* Touch-friendly interactive elements */
+  .touch-manipulation {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  
+  /* Minimum touch target size (44px iOS/48px Android standard) */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Safe area insets for notched devices (iPhone X+, etc.) */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: constant(safe-area-inset-bottom); /* iOS 11.0-11.2 fallback */
+  }
+  
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+    padding-top: constant(safe-area-inset-top);
+  }
+  
+  .px-safe {
+    padding-left: env(safe-area-inset-left);
+    padding-left: constant(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-right: constant(safe-area-inset-right);
+  }
+  
+  /* Smooth momentum scrolling for iOS */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  
+  /* Prevent text selection on interactive elements */
+  .no-select {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+  }
+  
+  /* Active state feedback for better touch UX */
+  .active-scale {
+    transition: transform 0.1s ease;
+  }
+  
+  .active-scale:active {
+    transform: scale(0.98);
+  }
+  
+  /* Card shadow optimized for mobile */
+  .card-shadow {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 
+                0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* Mobile-specific improvements */
+@media (max-width: 640px) {
+  /* Prevent iOS zoom on input focus */
+  body {
+    font-size: 16px;
+  }
+  
+  /* Better form inputs - prevent zoom on iOS */
+  input, 
+  select, 
+  textarea,
+  .glass-input {
+    font-size: 16px !important;
+    line-height: 1.5;
+  }
+  
+  /* Better spacing on mobile */
+  .glass-card {
+    padding: 1rem;
+    border-radius: 12px;
+  }
+  
+  /* Smaller buttons on mobile but still touch-friendly */
+  .premium-button-primary,
+  .premium-button-secondary {
+    padding: 14px 20px;
+    font-size: 15px;
+    min-height: 48px;
+  }
+  
+  /* Better modal/dialog on mobile */
+  .modal-container {
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  
+  /* Horizontal scroll for cards/carousels */
+  .horizontal-scroll {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  
+  .horizontal-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .horizontal-scroll > * {
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+}
+
+/* Tablet optimizations */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .content-container {
+    padding: 0 2rem;
+  }
+  
+  .glass-card {
+    padding: 1.5rem;
+  }
+}
+
+/* Landscape mobile */
+@media (max-width: 896px) and (orientation: landscape) {
+  .min-h-screen {
+    min-height: 100vh;
+  }
+  
+  /* Reduce vertical spacing in landscape */
+  .space-y-4 > * + * {
+    margin-top: 0.75rem;
+  }
+  
+  .space-y-6 > * + * {
+    margin-top: 1rem;
+  }
+}
+
+/* High DPI displays (Retina) */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  .glass-card,
+  .glass-input {
+    border-width: 0.5px;
+  }
+}
+
+/* Enhance buttons for mobile */
+button, 
+.premium-button-primary,
+.premium-button-secondary,
+a[role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  cursor: pointer;
+}
+
+/* Active state for all interactive elements */
+button:active,
+.premium-button-primary:active,
+.premium-button-secondary:active {
+  transform: scale(0.98);
+  transition: transform 0.1s ease;
+}
+
+/* Better focus states for accessibility */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+}
+
+/* Swipeable card animations */
+@keyframes swipeIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.swipe-in {
+  animation: swipeIn 0.3s ease-out;
+}
+
+/* Loading state animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.pulse-animation {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Capacitor-specific fixes */
+.capacitor-app {
+  /* Disable pull-to-refresh on iOS */
+  overscroll-behavior-y: contain;
+  
+  /* Disable elastic scrolling */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent layout shift on iOS keyboard */
+@supports (-webkit-touch-callout: none) {
+  input:focus,
+  textarea:focus,
+  select:focus {
+    font-size: 16px;
+  }
+}

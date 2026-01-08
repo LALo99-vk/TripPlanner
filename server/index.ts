@@ -4,6 +4,11 @@ import dotenv from 'dotenv';
 import OpenAI from 'openai';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import axios from 'axios';
+
+// In-memory storage for SOS sessions (prototype - use database in production)
+const sosSessions: Record<string, any> = {};
+const sosSessionsByPhone: Record<string, string> = {};
 
 // Load environment variables
 // Try loading from server directory first, then root
@@ -53,6 +58,22 @@ if (!OPENWEATHER_API_KEY) {
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
 const OPENWEATHER_GEO_URL = 'https://api.openweathermap.org/geo/1.0'; // Geocoding API uses different base URL
 
+// TextBee Configuration for SMS
+const TEXTBEE_API_KEY = process.env.TEXTBEE_API_KEY;
+const TEXTBEE_DEVICE_ID = process.env.TEXTBEE_DEVICE_ID;
+const TEXTBEE_BASE_URL = 'https://api.textbee.dev/api/v1';
+
+let textbeeConfigured = false;
+
+if (TEXTBEE_API_KEY && TEXTBEE_DEVICE_ID) {
+  textbeeConfigured = true;
+  console.log(`✅ TextBee initialized with device: ${TEXTBEE_DEVICE_ID.substring(0, 8)}...`);
+} else {
+  console.warn('⚠️  WARNING: TextBee credentials not found. SMS features will not work.');
+  console.warn('   Add TEXTBEE_API_KEY and TEXTBEE_DEVICE_ID to your .env file');
+  console.warn('   Get your credentials from: https://textbee.dev');
+}
+
 // Weather data interface
 interface WeatherData {
   date: string;
@@ -62,6 +83,348 @@ interface WeatherData {
   icon: string;
   humidity: number;
   windSpeed: number;
+}
+
+// Seasonal validation interface
+interface SeasonalValidation {
+  isValid: boolean;
+  warnings: string[];
+  suggestions: string[];
+  severity: 'safe' | 'caution' | 'unsafe';
+}
+
+// Seasonal rules database for Indian destinations
+interface SeasonalRule {
+  location: string; // Can be city name or region
+  bestMonths: number[]; // 1-12
+  avoidMonths: number[]; // 1-12
+  unsafeMonths: number[]; // 1-12 (absolutely unsafe)
+  reason: string;
+  alternatives?: string;
+  specificWarnings?: { [key: number]: string }; // month -> warning
+}
+
+// Comprehensive seasonal rules for popular Indian destinations
+const SEASONAL_RULES: SeasonalRule[] = [
+  // Beach destinations - Monsoon warnings
+  {
+    location: 'Goa',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [6, 7, 8, 9],
+    unsafeMonths: [7, 8],
+    reason: 'Heavy monsoon makes beaches unsafe, water sports unavailable, strong currents and rough seas',
+    alternatives: 'Consider Kerala backwaters, Pondicherry (off-season but accessible), or wait until October',
+    specificWarnings: {
+      6: 'Monsoon starting - beaches becoming unsafe, many shacks closed',
+      7: 'Peak monsoon - beaches closed, water sports completely unavailable, dangerous sea conditions',
+      8: 'Heavy rainfall continues - most beach activities unsafe, limited restaurant options',
+      9: 'Monsoon tail-end - still rainy, beaches not fully operational'
+    }
+  },
+  {
+    location: 'Kerala',
+    bestMonths: [9, 10, 11, 12, 1, 2, 3],
+    avoidMonths: [5, 6, 7, 8],
+    unsafeMonths: [],
+    reason: 'Monsoon season (June-August) brings heavy rains but backwaters are still accessible. May is extremely hot and humid.',
+    alternatives: 'Backwater stays are beautiful during monsoon (June-August) but beach activities not recommended. October-March is ideal for all activities.',
+    specificWarnings: {
+      5: 'Extreme heat and humidity - outdoor activities very uncomfortable',
+      6: 'Monsoon starts - beaches less suitable, backwaters beautiful',
+      7: 'Peak monsoon - expect heavy rains, plan indoor activities',
+      8: 'Monsoon continues - lush greenery but frequent rain'
+    }
+  },
+  {
+    location: 'Andaman',
+    bestMonths: [10, 11, 12, 1, 2, 3, 4],
+    avoidMonths: [5, 6, 7, 8, 9],
+    unsafeMonths: [6, 7, 8],
+    reason: 'Monsoon brings rough seas, many ferries cancelled, water sports unsafe, poor visibility for diving',
+    alternatives: 'Visit between October-April for best weather and water activities',
+    specificWarnings: {
+      6: 'Monsoon begins - ferry services disrupted, snorkeling/diving poor visibility',
+      7: 'Peak monsoon - many islands inaccessible, water sports cancelled',
+      8: 'Heavy rains continue - rough seas make ferry travel uncomfortable and unsafe'
+    }
+  },
+  
+  // High-altitude destinations - Winter warnings
+  {
+    location: 'Ladakh',
+    bestMonths: [5, 6, 7, 8, 9],
+    avoidMonths: [10, 11, 12, 1, 2, 3, 4],
+    unsafeMonths: [12, 1, 2],
+    reason: 'Roads closed due to heavy snowfall, extreme cold (-20°C to -30°C), most hotels closed, oxygen levels dangerously low',
+    alternatives: 'Visit May-September only. For winter experiences, consider Manali, Shimla, or Auli which remain accessible.',
+    specificWarnings: {
+      10: 'Getting very cold, some roads starting to close',
+      11: 'Many roads closed, most hotels shut for winter',
+      12: 'Complete road closure (Manali-Leh, Srinagar-Leh), extreme cold, no tourism infrastructure',
+      1: 'Peak winter - roads blocked, temperatures -25°C, life-threatening conditions',
+      2: 'Still extreme winter conditions, roads remain closed',
+      3: 'Snow melting begins but roads still closed, unpredictable weather',
+      4: 'Roads opening late April - still risky, carry winter gear'
+    }
+  },
+  {
+    location: 'Spiti Valley',
+    bestMonths: [6, 7, 8, 9],
+    avoidMonths: [10, 11, 12, 1, 2, 3, 4, 5],
+    unsafeMonths: [11, 12, 1, 2, 3],
+    reason: 'Roads completely closed, extreme snowfall, temperatures drop to -30°C, no access possible',
+    alternatives: 'Only accessible June-September. For winter mountain trips, visit Manali, Shimla, or Mussoorie.',
+    specificWarnings: {
+      11: 'Roads closing, heavy snowfall begins',
+      12: 'Completely cut off from rest of India',
+      1: 'Peak winter - no access, extreme cold',
+      2: 'Continues to be inaccessible',
+      3: 'Roads still blocked'
+    }
+  },
+  {
+    location: 'Manali',
+    bestMonths: [3, 4, 5, 6, 9, 10, 11],
+    avoidMonths: [7, 8],
+    unsafeMonths: [],
+    reason: 'July-August is monsoon season with landslides and road blockages common. December-February is very cold but accessible for snow lovers.',
+    alternatives: 'March-June and September-November are ideal. December-January good for snow activities but carry heavy winter gear.',
+    specificWarnings: {
+      7: 'Monsoon - frequent landslides, road closures common',
+      8: 'Peak monsoon - risky mountain roads, avoid if possible',
+      12: 'Heavy snowfall - roads may be closed temporarily, carry chains',
+      1: 'Peak winter - heavy snow, sub-zero temperatures, snow activities available',
+      2: 'Still very cold, roads can be blocked after fresh snowfall'
+    }
+  },
+  {
+    location: 'Leh',
+    bestMonths: [5, 6, 7, 8, 9],
+    avoidMonths: [10, 11, 12, 1, 2, 3, 4],
+    unsafeMonths: [11, 12, 1, 2],
+    reason: 'Same as Ladakh - extreme winter conditions, complete road closure',
+    alternatives: 'Only May-September. Fly in if visiting in shoulder months (April/October) as roads may be closed.'
+  },
+  
+  // Desert destinations - Summer warnings
+  {
+    location: 'Jaisalmer',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [4, 5, 6, 7, 8],
+    unsafeMonths: [5, 6],
+    reason: 'Extreme desert heat (45-50°C), sand storms, outdoor activities dangerous, risk of heat stroke',
+    alternatives: 'October-March is perfect. For summer travel, consider hill stations like Shimla, Ooty, or Coorg.',
+    specificWarnings: {
+      4: 'Heat building up (38-42°C) - outdoor activities uncomfortable',
+      5: 'Extreme heat (45-48°C) - desert safaris dangerous, camel rides only early morning/evening',
+      6: 'Peak summer (48-50°C) - outdoor activities life-threatening, stay indoors 10 AM - 6 PM',
+      7: 'Monsoon heat and humidity - still very hot (40-45°C)',
+      8: 'Continued heat - not recommended for tourism'
+    }
+  },
+  {
+    location: 'Jodhpur',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [4, 5, 6, 7],
+    unsafeMonths: [5, 6],
+    reason: 'Extreme desert heat makes sightseeing unbearable, fort visits dangerous due to heat exposure',
+    alternatives: 'Visit October-March. Summer alternatives: Udaipur (slightly cooler), or hill stations.',
+    specificWarnings: {
+      5: 'Extreme heat (44-48°C) - fort visits only early morning, risk of dehydration',
+      6: 'Peak heat (46-50°C) - avoid midday activities, heat exhaustion risk'
+    }
+  },
+  {
+    location: 'Bikaner',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [4, 5, 6, 7],
+    unsafeMonths: [5, 6],
+    reason: 'Similar to Jaisalmer - extreme desert heat',
+    alternatives: 'October-March only for comfortable sightseeing.'
+  },
+  
+  // Hill stations - Snow and Monsoon considerations
+  {
+    location: 'Shimla',
+    bestMonths: [3, 4, 5, 6, 10, 11, 12],
+    avoidMonths: [7, 8, 9],
+    unsafeMonths: [],
+    reason: 'Monsoon brings heavy rainfall and landslides. December-January has snow (good for snow lovers).',
+    alternatives: 'March-June for pleasant weather, December-January for snow experience.',
+    specificWarnings: {
+      7: 'Heavy monsoon - landslides common on mountain roads',
+      8: 'Peak monsoon - road travel risky',
+      1: 'Snowfall expected - carry winter gear, roads may be temporarily closed'
+    }
+  },
+  {
+    location: 'Mussoorie',
+    bestMonths: [3, 4, 5, 6, 9, 10, 11],
+    avoidMonths: [7, 8],
+    unsafeMonths: [],
+    reason: 'Heavy monsoon rains, poor visibility, landslides on approach roads',
+    alternatives: 'March-June and September-November ideal. December-February cold but accessible.',
+    specificWarnings: {
+      7: 'Monsoon - frequent landslides',
+      8: 'Heavy rains continue'
+    }
+  },
+  {
+    location: 'Ooty',
+    bestMonths: [10, 11, 12, 1, 2, 3, 4, 5],
+    avoidMonths: [6, 7, 8, 9],
+    unsafeMonths: [],
+    reason: 'Monsoon season - heavy rains, landslides, poor visibility',
+    alternatives: 'October-May is excellent with pleasant weather year-round.'
+  },
+  {
+    location: 'Darjeeling',
+    bestMonths: [3, 4, 5, 10, 11],
+    avoidMonths: [6, 7, 8, 9],
+    unsafeMonths: [],
+    reason: 'Monsoon brings heavy rains, landslides, and obscures mountain views (no Kanchenjunga visibility)',
+    alternatives: 'March-May and October-November for clear mountain views.',
+    specificWarnings: {
+      6: 'Monsoon starts - views getting obscured',
+      7: 'Heavy rains - landslides, no mountain views',
+      8: 'Peak monsoon - dangerous roads, zero visibility'
+    }
+  },
+  
+  // Coastal and Monsoon-affected regions
+  {
+    location: 'Mumbai',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [6, 7, 8],
+    unsafeMonths: [],
+    reason: 'Heavy monsoon rains, flooding in low-lying areas, local train disruptions',
+    alternatives: 'October-March is ideal. Monsoon (June-August) can be experienced but expect rain daily.',
+    specificWarnings: {
+      7: 'Peak monsoon - flooding possible, carry umbrellas, check local train status',
+      8: 'Heavy rains continue - some areas waterlogged'
+    }
+  },
+  {
+    location: 'Coorg',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [6, 7, 8],
+    unsafeMonths: [],
+    reason: 'Heavy monsoon rains, leeches in forests, waterfalls dangerous due to strong currents',
+    alternatives: 'October-March is best. Monsoon is beautiful (lush green) but outdoor activities limited.',
+    specificWarnings: {
+      7: 'Heavy rains - trekking not recommended, waterfalls dangerous',
+      8: 'Peak monsoon - leeches in forests, slippery trails'
+    }
+  },
+  
+  // Plains - Extreme summer warnings
+  {
+    location: 'Delhi',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [5, 6, 7],
+    unsafeMonths: [],
+    reason: 'Extreme heat in May-June (45°C+), uncomfortable for sightseeing. July-August is humid due to monsoon.',
+    alternatives: 'October-March is perfect. April and September are manageable.',
+    specificWarnings: {
+      5: 'Extreme heat (42-46°C) - sightseeing uncomfortable, stay in AC',
+      6: 'Peak summer (44-48°C) - outdoor monuments unbearable midday',
+      7: 'Hot and humid monsoon - rain and heat combination'
+    }
+  },
+  {
+    location: 'Agra',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [5, 6, 7],
+    unsafeMonths: [],
+    reason: 'Extreme heat makes Taj Mahal visit exhausting. Smog in winter mornings but temperatures pleasant.',
+    alternatives: 'October-March best. Sunrise Taj visit recommended in summer if visiting.',
+    specificWarnings: {
+      5: 'Extreme heat (44-48°C) - visit Taj Mahal only early morning or late evening',
+      6: 'Peak summer - avoid midday monument visits'
+    }
+  },
+  {
+    location: 'Jaipur',
+    bestMonths: [10, 11, 12, 1, 2, 3],
+    avoidMonths: [5, 6, 7],
+    unsafeMonths: [],
+    reason: 'Desert heat makes fort visits exhausting and potentially dangerous',
+    alternatives: 'October-March ideal. Carry water and sun protection in summer.',
+    specificWarnings: {
+      5: 'Extreme heat (43-47°C) - fort visits only early morning',
+      6: 'Peak heat - risk of heat stroke during outdoor activities'
+    }
+  }
+];
+
+// Function to validate season-place compatibility
+function validateSeasonalCompatibility(destination: string, travelMonth: number): SeasonalValidation {
+  const validation: SeasonalValidation = {
+    isValid: true,
+    warnings: [],
+    suggestions: [],
+    severity: 'safe'
+  };
+
+  // Find matching seasonal rule
+  const rule = SEASONAL_RULES.find(r => 
+    destination.toLowerCase().includes(r.location.toLowerCase()) ||
+    r.location.toLowerCase().includes(destination.toLowerCase())
+  );
+
+  if (!rule) {
+    // No specific rule found, but add general seasonal advice for India
+    if (travelMonth >= 6 && travelMonth <= 8) {
+      validation.warnings.push('Monsoon season in most of India - expect rainfall');
+      validation.suggestions.push('Carry rain gear and check weather forecasts daily');
+    } else if (travelMonth >= 4 && travelMonth <= 6 && 
+               (destination.toLowerCase().includes('delhi') || 
+                destination.toLowerCase().includes('rajasthan') ||
+                destination.toLowerCase().includes('north india'))) {
+      validation.warnings.push('Summer season - can be very hot in plains and desert areas');
+      validation.suggestions.push('Plan indoor activities during midday (12 PM - 4 PM)');
+    }
+    return validation;
+  }
+
+  // Check if month is unsafe
+  if (rule.unsafeMonths.includes(travelMonth)) {
+    validation.isValid = false;
+    validation.severity = 'unsafe';
+    validation.warnings.push(`⚠️ UNSAFE: ${destination} in ${getMonthName(travelMonth)} - ${rule.reason}`);
+    if (rule.alternatives) {
+      validation.suggestions.push(`STRONGLY RECOMMENDED: ${rule.alternatives}`);
+    }
+    validation.suggestions.push(`Best months to visit ${destination}: ${rule.bestMonths.map(m => getMonthName(m)).join(', ')}`);
+  }
+  // Check if month should be avoided
+  else if (rule.avoidMonths.includes(travelMonth)) {
+    validation.isValid = true; // Not blocking, but warning
+    validation.severity = 'caution';
+    validation.warnings.push(`⚠️ CAUTION: ${destination} in ${getMonthName(travelMonth)} - ${rule.reason}`);
+    if (rule.alternatives) {
+      validation.suggestions.push(`Consider: ${rule.alternatives}`);
+    }
+  }
+  // Check if it's best months (add positive reinforcement)
+  else if (rule.bestMonths.includes(travelMonth)) {
+    validation.warnings.push(`✅ EXCELLENT TIMING: ${getMonthName(travelMonth)} is one of the best months to visit ${destination}`);
+    validation.severity = 'safe';
+  }
+
+  // Add specific monthly warnings if available
+  if (rule.specificWarnings && rule.specificWarnings[travelMonth]) {
+    validation.warnings.push(rule.specificWarnings[travelMonth]);
+  }
+
+  return validation;
+}
+
+// Helper function to get month name
+function getMonthName(month: number): string {
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  return months[month - 1] || 'Unknown';
 }
 
 // OpenWeather API response types
@@ -115,16 +478,18 @@ async function fetchWeatherForecast(city: string, startDate: string, endDate: st
     // Use the cleaned API key
     const apiKeyToUse = cleanApiKey;
 
-    // Try with city name, and if that fails, try with ", India" appended
-    // Note: Geocoding API uses different base URL than weather API
-    let searchQuery = city;
-    let geoResponse = await fetch(
+    // Always search with ", India" to get correct location (avoid confusion with cities in other countries)
+    // For example: "Goa" could match "Goa, Philippines" instead of "Goa, India"
+    const searchQuery = `${city}, India`;
+    console.log(`Fetching weather for: "${searchQuery}"`);
+    
+    const geoResponse = await fetch(
       `${OPENWEATHER_GEO_URL}/direct?q=${encodeURIComponent(searchQuery)}&limit=1&appid=${apiKeyToUse}`
     );
     
     if (!geoResponse.ok) {
       const errorText = await geoResponse.text();
-      console.error(`Weather API error (${geoResponse.status}) for "${city}":`, errorText.substring(0, 200));
+      console.error(`Weather API error (${geoResponse.status}) for "${searchQuery}":`, errorText.substring(0, 200));
       
       // Check if it's an API key issue
       if (geoResponse.status === 401 || geoResponse.status === 403) {
@@ -140,31 +505,19 @@ async function fetchWeatherForecast(city: string, startDate: string, endDate: st
         return []; // Return empty array instead of throwing
       }
       
-      // Try with ", India" appended
-      searchQuery = `${city}, India`;
-      console.log(`Retrying weather fetch with: "${searchQuery}"`);
-      geoResponse = await fetch(
-        `${OPENWEATHER_GEO_URL}/direct?q=${encodeURIComponent(searchQuery)}&limit=1&appid=${apiKeyToUse}`
-      );
-      
-      if (!geoResponse.ok) {
-        const retryErrorText = await geoResponse.text();
-        console.error(`Weather API retry error (${geoResponse.status}) for "${searchQuery}":`, retryErrorText.substring(0, 200));
-        
-        // Don't throw - just return empty array so plan generation can continue
-        console.warn(`Skipping weather data for "${city}". Plan generation will continue without weather information.`);
-        return [];
-      }
+      // Don't throw - just return empty array so plan generation can continue
+      console.warn(`Skipping weather data for "${city}". Plan generation will continue without weather information.`);
+      return [];
     }
     
     const geoData = await geoResponse.json() as GeoLocationResponse[];
     if (!geoData || geoData.length === 0) {
-      console.log(`No coordinates found for city: ${city}`);
+      console.log(`❌ No coordinates found for city: ${searchQuery}`);
       return []; // Return empty array, plan generation will continue without weather
     }
     
-    const { lat, lon } = geoData[0];
-    console.log(`Found coordinates for ${city}: ${lat}, ${lon}`);
+    const { lat, lon, name, country, state } = geoData[0];
+    console.log(`✅ Found coordinates: ${name}, ${state || ''}, ${country} (${lat.toFixed(4)}, ${lon.toFixed(4)})`);
     
     // Get 5-day forecast
     const forecastResponse = await fetch(
@@ -1039,11 +1392,27 @@ async function generateSingleDayPlan(params: {
   customActivities: string[];
   activitiesPerDay: number;
   tripStyle: string;
+  groupType: string;
+  tripIntent: string;
+  budgetTier: string;
+  comfortLevel: string;
+  crowdTolerance: string;
+  foodPreference: string;
+  planRigidity: string;
+  culturalNotesRequired: boolean;
+  travelMaturity: string;
+  isFirstVisit: boolean;
+  tripTheme: string;
+  arrivalTime: string;
+  departureTime: string;
+  vibePreference: string;
   weatherData?: WeatherData;
   previousDaysSummary?: string;
   remainingBudget: number;
+  travelMonth: number;
+  seasonalValidation: SeasonalValidation;
 }): Promise<any> {
-  const {
+  const {  
     dayNumber,
     totalDays,
     date,
@@ -1056,9 +1425,25 @@ async function generateSingleDayPlan(params: {
     customActivities,
     activitiesPerDay,
     tripStyle,
+    groupType,
+    tripIntent,
+    budgetTier,
+    comfortLevel,
+    crowdTolerance,
+    foodPreference,
+    planRigidity,
+    culturalNotesRequired,
+    travelMaturity,
+    isFirstVisit,
+    tripTheme,
+    arrivalTime,
+    departureTime,
+    vibePreference,
     weatherData,
     previousDaysSummary,
-    remainingBudget
+    remainingBudget,
+    travelMonth,
+    seasonalValidation
   } = params;
 
   // Build context about previous days
@@ -1067,7 +1452,7 @@ async function generateSingleDayPlan(params: {
     previousContext = `\n\nPREVIOUS DAYS SUMMARY (for consistency and continuity):\n${previousDaysSummary}\n\nIMPORTANT: Make sure Day ${dayNumber} activities complement and don't repeat the previous days.`;
   }
 
-  // Build weather context for this specific day
+  // Build weather and seasonal context for this specific day
   let weatherContext = '';
   if (weatherData) {
     weatherContext = `\n\nWEATHER FOR DAY ${dayNumber} (${date}):\n`;
@@ -1090,44 +1475,516 @@ async function generateSingleDayPlan(params: {
     }
   }
 
-  const prompt = `You are WanderWise, an expert Indian travel planner. Generate a DETAILED plan for DAY ${dayNumber} of ${totalDays} days, strictly as valid JSON only.
+  // Determine if this is arrival day or departure day
+  const isArrivalDay = dayNumber === 1;
+  const isDepartureDay = dayNumber === totalDays;
+  const isMiddleDay = dayNumber > 1 && dayNumber < totalDays;
+  
+  // Get day of week for Monday check
+  const dayDateObj = new Date(date);
+  const dayOfWeek = dayDateObj.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const isMonday = dayOfWeek === 1;
+  
+  // Determine if it's a metro city (add traffic buffer)
+  const metroCities = ['Mumbai', 'Delhi', 'Bangalore', 'Kolkata', 'Chennai', 'Hyderabad', 'Pune'];
+  const isMetroCity = metroCities.some(city => to.toLowerCase().includes(city.toLowerCase()));
+
+  // Calculate energy capacity based on group type, vibe, and day type
+  const getEnergyCapacity = (): { level: string; maxActivities: number; description: string } => {
+    // Base energy by group type
+    let baseEnergy = 3; // moderate
+    if (groupType === 'friends') baseEnergy = 4; // high
+    if (groupType === 'couples') baseEnergy = 3; // medium
+    if (groupType === 'family-kids') baseEnergy = 2; // low
+    if (groupType === 'solo') baseEnergy = 3.5; // medium-high
+    
+    // Modify by vibe preference
+    if (vibePreference === 'chill') baseEnergy -= 1;
+    if (vibePreference === 'active') baseEnergy += 0.5;
+    if (vibePreference === 'intense') baseEnergy += 1;
+    
+    // Modify by day type
+    if (isArrivalDay) baseEnergy = Math.min(baseEnergy, 2); // cap at 2 for arrival
+    if (isDepartureDay) baseEnergy = Math.min(baseEnergy, 2); // cap at 2 for departure
+    
+    // Modify by trip intent
+    if (tripIntent === 'relaxation' || tripIntent === 'honeymoon') baseEnergy -= 0.5;
+    if (tripIntent === 'adventure' || tripIntent === 'celebration') baseEnergy += 0.5;
+    
+    const finalEnergy = Math.max(1, Math.min(5, Math.round(baseEnergy)));
+    
+    const levels: { [key: number]: { level: string; description: string } } = {
+      1: { level: 'very-light', description: 'Rest day with minimal activity' },
+      2: { level: 'light', description: 'Easy pace, 1-2 activities max' },
+      3: { level: 'moderate', description: 'Comfortable pace, 2-3 activities' },
+      4: { level: 'active', description: 'Full day, 3-4 activities' },
+      5: { level: 'intense', description: 'Action-packed, 4-5 activities' }
+    };
+    
+    return { ...levels[finalEnergy], maxActivities: finalEnergy };
+  };
+  
+  const energyCapacity = getEnergyCapacity();
+  
+  // If user specified fixed activities, use that; otherwise use energy-based
+  const useFixedActivities = activitiesPerDay > 0;
+  const targetActivities = useFixedActivities ? activitiesPerDay : energyCapacity.maxActivities;
+
+  const prompt = `You are an expert HUMAN travel planner, not a generic itinerary generator.
+
+Your job is to create a REALISTIC, ENJOYABLE, and HUMAN-LIKE trip plan that adapts dynamically based on who is traveling, why they are traveling, their preferences, and their physical and emotional energy limits.
+
+⚠️ CRITICAL: This is NOT a generic template itinerary. Every activity MUST align with the user's specific travel style, preferences, interests, and seasonal conditions.
+
+⚠️ ABSOLUTE RULE:
+${useFixedActivities 
+  ? `User has requested EXACTLY ${activitiesPerDay} activities. Honor this override.` 
+  : `Do NOT generate a fixed number of activities. Activities must EMERGE NATURALLY based on group type, trip intent, energy, and logistics.
+Today's ENERGY CAPACITY: ${energyCapacity.level.toUpperCase()} (${energyCapacity.description})
+SUGGESTED ACTIVITY RANGE: 1-${energyCapacity.maxActivities} activities (stop when the day feels "complete")`}
+
+════════════════════════════════════════
+SEASONAL COMPATIBILITY (ABSOLUTELY CRITICAL)
+════════════════════════════════════════
+
+Travel Month: ${getMonthName(travelMonth)}
+Destination: ${to}
+
+${seasonalValidation.warnings.length > 0 ? `
+⚠️ SEASONAL WARNINGS FOR THIS TRIP:
+${seasonalValidation.warnings.map(w => `• ${w}`).join('\n')}
+
+${seasonalValidation.suggestions.length > 0 ? `REQUIRED ADJUSTMENTS:
+${seasonalValidation.suggestions.map(s => `• ${s}`).join('\n')}` : ''}
+
+YOU MUST:
+1. ${seasonalValidation.severity === 'caution' ? 'Avoid or minimize activities affected by seasonal conditions' : 'Acknowledge good timing and plan accordingly'}
+2. Do NOT recommend activities that are unsafe or unavailable due to season
+3. Suggest indoor/alternative activities if weather is challenging
+4. Include specific seasonal tips in activity descriptions
+
+EXAMPLES OF ACTIVITIES TO AVOID (if applicable):
+- Beach activities during heavy monsoon (July-August in Goa, Andaman)
+- Water sports when seas are rough or unsafe
+- High-altitude road trips during peak winter snowfall
+- Desert outdoor activities during extreme summer heat (May-June in Rajasthan)
+- Outdoor sightseeing during extreme heat waves (45°C+)
+- Mountain roads during monsoon landslide season
+- Wildlife safaris in parks closed for breeding season
+
+ALWAYS VALIDATE: Before including any activity, ask yourself:
+"Is this activity safe, practical, and enjoyable in ${getMonthName(travelMonth)} at ${to}?"
+If answer is NO or RISKY, either:
+  a) Skip it entirely, or
+  b) Modify it (e.g., indoor alternative, different timing, weather-protected version)
+  c) Add explicit warnings about conditions
+
+` : `✅ GOOD SEASONAL TIMING: ${getMonthName(travelMonth)} is suitable for ${to}.
+However, still consider:
+- Daily weather patterns (heat, rain, humidity)
+- Activity timing (avoid midday heat if applicable)
+- Seasonal crowd levels
+`}
+
+────────────────────────────────────────
+USER PROFILE (STRICTLY ENFORCE - NOT SUGGESTIONS, THESE ARE REQUIREMENTS)
+────────────────────────────────────────
+
+🎯 TRIP STYLE: ${tripStyle}
+   ${tripStyle === 'relaxing' ? '→ Focus on: Spas, beaches, calm environments, leisurely meals, no rushing' : ''}
+   ${tripStyle === 'adventure' ? '→ Focus on: Trekking, sports, outdoor activities, physical challenges, adrenaline' : ''}
+   ${tripStyle === 'cultural' ? '→ Focus on: Museums, heritage sites, local traditions, art, history, cultural performances' : ''}
+   ${tripStyle === 'family' ? '→ Focus on: Parks, safe kid-friendly activities, family restaurants, easy logistics' : ''}
+   ${tripStyle === 'luxury' ? '→ Focus on: 5-star experiences, fine dining, premium activities, private tours, comfort' : ''}
+   ⚠️ EVERY activity must align with this style. Do NOT mix random activities that don't fit.
+
+👥 GROUP COMPOSITION: ${groupType}
+   This fundamentally changes what activities are appropriate.
+
+🎭 TRIP INTENT: ${tripIntent}
+   ${tripIntent === 'honeymoon' ? '→ ROMANTIC focus: Private experiences, sunset dinners, couples spa, scenic moments' : ''}
+   ${tripIntent === 'celebration' ? '→ CELEBRATORY focus: Special experiences, group fun, memorable moments, photo ops' : ''}
+   ${tripIntent === 'relaxation' ? '→ RELAXATION focus: Slow pace, spa, nature, minimal scheduling, comfort' : ''}
+   ${tripIntent === 'adventure' ? '→ ADVENTURE focus: Physical activities, exploration, thrills, outdoor experiences' : ''}
+   ${tripIntent === 'spiritual' ? '→ SPIRITUAL focus: Temples, meditation, yoga, peaceful environments, introspection' : ''}
+   ⚠️ The entire day should reflect this intent. Every activity should serve this purpose.
+
+💫 VIBE / ENERGY PREFERENCE: ${vibePreference}
+   This tells you how packed or relaxed the day should be.
+
+💰 BUDGET TIER: ${budgetTier}
+   ${budgetTier === 'budget' ? '→ Street food, public transport, budget stays, free/low-cost activities' : ''}
+   ${budgetTier === 'mid-range' ? '→ Mix of local and comfortable, shared/private transport, decent restaurants' : ''}
+   ${budgetTier === 'luxury' ? '→ Premium everything: Private cabs, fine dining, exclusive experiences, 5-star comfort' : ''}
+
+🛋️ COMFORT LEVEL: ${comfortLevel}
+   ${comfortLevel === 'basic' ? '→ Basic accommodations acceptable, shared transport OK, focus on experiences' : ''}
+   ${comfortLevel === 'comfortable' ? '→ Good quality stays, mix of transport, balance comfort and experience' : ''}
+   ${comfortLevel === 'premium' ? '→ High comfort priority, premium stays, private transport, quality over quantity' : ''}
+
+👫 CROWD TOLERANCE: ${crowdTolerance}
+   ${crowdTolerance === 'avoid-crowds' ? '→ Schedule popular spots at off-peak times, suggest quieter alternatives' : ''}
+   ${crowdTolerance === 'moderate' ? '→ Balance popular and quiet spots' : ''}
+   ${crowdTolerance === 'love-crowds' ? '→ Include bustling markets, peak-time visits, social experiences' : ''}
+
+🍽️ FOOD PREFERENCE: ${foodPreference}
+   ${foodPreference === 'vegetarian' ? '⚠️ CRITICAL: ALL food recommendations MUST be vegetarian only' : ''}
+   ${foodPreference === 'vegan' ? '⚠️ CRITICAL: ALL food recommendations MUST be vegan only' : ''}
+   ${foodPreference === 'non-vegetarian' ? '→ Include local non-veg specialties' : ''}
+
+📅 PLAN FLEXIBILITY: ${planRigidity}
+   ${planRigidity === 'flexible' ? '→ Include buffer time, backup options, "if time permits" alternatives' : ''}
+   ${planRigidity === 'strict' ? '→ Precise timings, structured schedule, clear sequence' : ''}
+   ${planRigidity === 'balanced' ? '→ Structured but with some flexibility' : ''}
+
+📚 CULTURAL NOTES REQUIRED: ${culturalNotesRequired ? 'YES - Include cultural context, etiquette, local customs' : 'No'}
+
+🎒 TRAVEL MATURITY: ${travelMaturity}
+   ${travelMaturity === 'first_timer' ? '→ Iconic spots, clear directions, helpful tips, well-known places, safety guidance' : ''}
+   ${travelMaturity === 'experienced' ? '→ Hidden gems, offbeat locations, minimal hand-holding, local secrets' : ''}
+
+🆕 FIRST VISIT TO DESTINATION: ${isFirstVisit ? 'YES - Must include iconic experiences they cannot miss' : 'NO - Focus on new/different experiences'}
+
+📍 DESTINATION: ${to}
+📆 TRAVEL DATES: Day ${dayNumber} of ${totalDays} | Month: ${getMonthName(travelMonth)}
+${isArrivalDay ? `🛬 ARRIVAL TIME: ${arrivalTime}` : ''}
+${isDepartureDay ? `🛫 DEPARTURE TIME: ${departureTime}` : ''}
+
+🎨 USER'S SPECIFIC INTERESTS: ${Array.isArray(interests) && interests.length > 0 ? interests.join(', ') : 'Not specified'}
+   ${interests && interests.length > 0 ? `⚠️ CRITICAL: Prioritize activities matching these interests: ${interests.join(', ')}` : ''}
+
+${customActivities && customActivities.length > 0 ? `
+🎯 USER'S REQUESTED ACTIVITIES (MUST INCLUDE):
+${customActivities.map(a => `   • ${a}`).join('\n')}
+⚠️ These are EXPLICIT requests. Find natural ways to include them across the trip.
+` : ''}
+
+${customDestinations && customDestinations.length > 0 ? `
+📍 USER'S REQUESTED DESTINATIONS (MUST VISIT):
+${customDestinations.map(d => `   • ${d}`).join('\n')}
+⚠️ These destinations MUST appear in the itinerary. Plan route efficiently.
+` : ''}
+
+⚠️⚠️⚠️ CRITICAL ENFORCEMENT ⚠️⚠️⚠️
+This is NOT a suggestion list. These are REQUIREMENTS.
+- If user wants ${tripStyle} style → Plan ONLY ${tripStyle} activities
+- If user wants ${tripIntent} intent → Entire trip should serve this purpose
+- If user selected interests → Activities MUST match those interests
+- If user requested specific activities/destinations → They MUST appear
+- If user is ${travelMaturity} → Adjust complexity accordingly
+
+DO NOT CREATE GENERIC PLANS. Every activity must pass this test:
+"Does this activity match the user's style (${tripStyle}), intent (${tripIntent}), interests (${interests.join(', ')}), and preferences?"
+
+If answer is NO → DO NOT INCLUDE IT.
+
+────────────────────────────────────────
+TRIP THEME LOCK (CONSISTENCY GUARD)
+────────────────────────────────────────
+
+The overall theme of this trip is "${tripTheme}".
+Do NOT change tone abruptly between days unless justified by arrival/departure or energy curve.
+
+Theme Descriptions:
+- "party" → Energetic, social, nightlife-focused, fun group activities
+- "romantic" → Intimate, scenic, private moments, couples experiences
+- "explorer" → Discovery-focused, diverse experiences, adventure
+- "relaxed" → Slow-paced, comfort-first, minimal rushing
+- "mixed" → Balanced variety, no dominant mood
+
+CONSISTENCY RULE: Today's activities must feel like a natural continuation of this ${tripTheme} theme.
 
 TRIP OVERVIEW (Context for all days):
 - From: ${from}
 - To: ${to}
 - Total Duration: ${totalDays} days
 - Budget per day: ₹${Math.round(remainingBudget / (totalDays - dayNumber + 1))} (out of total ₹${budget})
-- Travelers: ${travelers}
 - Interests: ${Array.isArray(interests) ? interests.join(', ') : interests}
-- Trip Style: ${tripStyle || 'balanced'}
 ${customDestinations && customDestinations.length > 0 ? `- Must-visit destinations (must appear in the itinerary at least once across the trip): ${customDestinations.join(', ')}\n` : ''}
 ${customActivities && customActivities.length > 0 ? `- Specific activities requested (must appear in the itinerary at least once across the trip): ${customActivities.join(', ')}\n` : ''}
 
 DAY ${dayNumber} SPECIFIC DETAILS:
-- Date: ${date}
+- Date: ${date}${isMonday ? ' (MONDAY - NO MUSEUMS OR ZOOS)' : ''}
 - Activities needed: Exactly ${activitiesPerDay} activities
 - Budget for this day: Approximately ₹${Math.round(remainingBudget / (totalDays - dayNumber + 1))}
+- Day Type: ${isArrivalDay ? 'ARRIVAL DAY (must be LIGHT)' : isDepartureDay ? 'DEPARTURE DAY (must be LIGHT, end activities 4 hours before departure)' : 'MIDDLE DAY (peak energy)'}
 ${weatherContext}${previousContext}
 
-CRITICAL REQUIREMENTS:
-1. Generate EXACTLY ${activitiesPerDay} activities for Day ${dayNumber}
+==============================
+NON-NEGOTIABLE BEHAVIOR RULES
+==============================
+
+────────────────────────────────────────
+GROUP-SPECIFIC BEHAVIOR (NON-NEGOTIABLE)
+────────────────────────────────────────
+
+${groupType === 'friends' ? `FRIENDS GROUP DETECTED:
+• Prioritize adventure, nightlife, social energy, bonding moments
+• AVOID museums, slow art galleries, overly quiet spots
+• Late mornings are acceptable (no 6 AM starts)
+• If adventure-focused → include physically engaging experiences
+• If nights go late → next morning MUST start slow
+• Energy tolerance: HIGH` : ''}
+${groupType === 'couples' ? `COUPLES DETECTED:
+• Prioritize privacy, romance, scenic dining, emotional connection
+• AVOID noisy, crowded, group-heavy activities
+• Include intimate experiences (sunset, candlelight dinner, scenic walks)
+• Energy tolerance: MEDIUM` : ''}
+${groupType === 'family-kids' ? `FAMILY WITH KIDS DETECTED:
+• Prioritize safety, rest, washrooms, easy logistics
+• NO late nights (nothing after 8 PM)
+• MANDATORY breaks every few hours
+• AVOID steep treks or high-risk adventure
+• Kid-friendly venues and food only
+• Energy tolerance: LOW` : ''}
+${groupType === 'solo' ? `SOLO TRAVELER DETECTED:
+• Prioritize social hostels, cafes with WiFi, group tours
+• AVOID family resorts and overly romantic spots
+• Encourage social interaction without forcing it
+• Energy tolerance: MEDIUM-HIGH` : ''}
+
+Violating group logic makes the plan INVALID.
+
+────────────────────────────────────────
+ENERGY-BASED DAILY PLANNING (CRITICAL)
+────────────────────────────────────────
+
+⚠️ Do NOT plan by fixed activity count. Plan by ENERGY.
+
+TODAY'S ENERGY PROFILE:
+• Day Type: ${isArrivalDay ? 'ARRIVAL DAY (very light)' : isDepartureDay ? 'DEPARTURE DAY (light, stress-free)' : 'MIDDLE DAY (peak energy)'}
+• Energy Level: ${energyCapacity.level.toUpperCase()}
+• Vibe: ${vibePreference}
+• Max Activities: ${targetActivities} (but stop earlier if day feels complete)
+${isArrivalDay ? `• Arrival Time: ${arrivalTime} - Allow buffer for check-in before first activity` : ''}
+${isDepartureDay ? `• Departure Time: ${departureTime} - End all activities 4 HOURS before this` : ''}
+
+DAY TYPE RULES:
+${isArrivalDay ? '• ARRIVAL DAY → VERY LIGHT. No major activity. Allow hotel check-in (12-2 PM). Maybe 1-2 easy activities max.' : ''}
+${isMiddleDay ? '• MIDDLE DAY → Peak energy. Best experiences go here. Signature moments.' : ''}
+${isDepartureDay ? '• DEPARTURE DAY → Minimal, stress-free. Light breakfast activity at most. Pack and leave relaxed.' : ''}
+
+TRIP INTENT ENERGY MODIFIER:
+${tripIntent === 'relaxation' || tripIntent === 'honeymoon' ? '• Relaxation/Honeymoon → Slower pacing, fewer activities, more downtime' : ''}
+${tripIntent === 'adventure' || tripIntent === 'celebration' ? '• Adventure/Celebration → Higher energy days, more activities possible' : ''}
+${tripIntent === 'business' ? '• Business/Workation → Half-days only for activities' : ''}
+
+────────────────────────────────────────
+ACTIVITY INTENSITY AWARENESS
+────────────────────────────────────────
+
+ACTIVITY INTENSITY LEVELS:
+• LOW: Cafe, leisurely walk, beach lounging, shopping browse → 1 energy point
+• MEDIUM: Sightseeing, market exploration, museum, boat ride → 2 energy points
+• HIGH: Trekking, scuba, safari, water sports, intense adventure → 3 energy points
+• NIGHT: Party/clubbing → 2 points + AFFECTS NEXT MORNING
+
+STACKING RULES:
+• NEVER stack multiple HIGH intensity activities on the same day
+• If partying/clubbing at night → Next morning MUST start after 11 AM
+• Family with kids → No HIGH intensity activities at all
+• After HIGH intensity → follow with LOW intensity rest period
+
+────────────────────────────────────────
+VIBE & ENERGY (HOW IT SHOULD FEEL)
+────────────────────────────────────────
+
+${vibePreference === 'chill' ? '• CHILL VIBE: Max 1-2 locations/day. Long meals. Rest time. No rushing.' : ''}
+${vibePreference === 'balanced' ? '• BALANCED VIBE: Mix of activity and rest. 2-3 activities with breathing room.' : ''}
+${vibePreference === 'active' ? '• ACTIVE VIBE: Full days but not exhausting. 3-4 activities with good pacing.' : ''}
+${vibePreference === 'intense' ? '• INTENSE VIBE: Pack in experiences. Early starts, late nights. 4-5 activities.' : ''}
+${tripStyle === 'party' || tripStyle === 'adventure' ? '• Party/Adventure → Apply hangover buffer. NO early mornings after nightlife.' : ''}
+${tripStyle === 'relaxing' ? '• Relaxed → Comfort > coverage. Quality over quantity.' : ''}
+
+4. LOGISTICS REALITY:
+${isArrivalDay ? '- ARRIVAL DAY: Must be LIGHT. No full itineraries. Account for hotel check-in (12-2 PM).' : ''}
+${isDepartureDay ? '- DEPARTURE DAY: Must be LIGHT. Activities must END 4 hours before departure time.' : ''}
+- Do NOT crisscross the city. Cluster activities geographically.
+${isMetroCity ? '- METRO CITY DETECTED: Add 30% buffer to all travel times. Traffic is heavy.' : ''}
+
+5. SEASONAL & TIME RULES:
+${weatherData && weatherData.temperature > 30 ? '- PEAK SUMMER: No outdoor activities between 12-4 PM. Schedule indoor/covered activities during midday.' : ''}
+${weatherData && weatherData.condition.toLowerCase().includes('rain') ? '- MONSOON: No beaches. Focus on indoor activities, museums, covered markets, cafes.' : ''}
+${isMonday ? '- MONDAY: NO museums or zoos (they are closed).' : ''}
+- Photography → Scenic spots ONLY at sunrise or sunset.
+- Meal times: Breakfast (8-10 AM), Lunch (12:30-2:30 PM), Dinner (7-9 PM)
+
+6. BUDGET REALITY:
+${budgetTier === 'budget' ? '- Budget → Public transport, street food, budget accommodations. Quality experiences, not luxury.' : ''}
+${budgetTier === 'mid-range' ? '- Mid-Range → Mix of public and private transport, local restaurants, comfortable stays.' : ''}
+${budgetTier === 'luxury' ? '- Luxury → Private cabs, fine dining, premium experiences.' : ''}
+- Budget affects comfort and transport, NOT activity quality.
+
+7. CROWD TOLERANCE:
+${crowdTolerance === 'avoid-crowds' ? '- Avoid Crowds → Schedule popular spots early morning or late evening. Suggest off-beat alternatives.' : ''}
+${crowdTolerance === 'love-crowds' ? '- Love Crowds → Include bustling markets, popular tourist spots, peak-time visits.' : ''}
+${crowdTolerance === 'moderate' ? '- Moderate → Balance popular and quiet spots.' : ''}
+
+8. FOOD PREFERENCE:
+${foodPreference === 'vegetarian' ? '- Vegetarian → Only vegetarian restaurants and food recommendations.' : ''}
+${foodPreference === 'vegan' ? '- Vegan → Only vegan restaurants and food recommendations.' : ''}
+${foodPreference === 'non-vegetarian' ? '- Non-Vegetarian → Include local non-veg specialties.' : ''}
+
+9. TRAVEL MATURITY (HUGE REALISM BOOST):
+${travelMaturity === 'first_timer' ? `- First-Time Traveler → Provide clear directions, stick to iconic & well-known spots, include helpful tips.
+- Give detailed navigation instructions and landmarks.
+- Avoid overwhelming with too many options.
+- Include safety tips and what to expect.
+- Recommend tourist-friendly establishments.` : `- Experienced Traveler → Focus on offbeat locations, hidden gems, less explanation needed.
+- Skip the obvious tourist traps they've likely seen.
+- Include local-only spots and insider recommendations.
+- Less hand-holding, more discovery.
+- Suggest unique experiences over mainstream ones.`}
+
+==============================
+NO-REGRET RULE (TRUST ANCHOR)
+==============================
+
+${isFirstVisit ? `FIRST VISIT DETECTED - NO-REGRET RULE APPLIES:
+Even if the user prefers offbeat experiences, include at least ONE iconic experience per destination.
+This ensures they feel they truly visited the place.
+
+Examples of iconic experiences:
+- Gateway of India in Mumbai
+- Red Fort in Delhi
+- Taj Mahal in Agra
+- Marina Beach in Chennai
+- Mysore Palace in Mysore
+
+The user should never regret missing something obvious on their first visit.` : `REPEAT VISIT - FOCUS ON NEW EXPERIENCES:
+Since this is not their first visit, prioritize:
+- Hidden gems they likely missed before
+- New restaurants and cafes
+- Seasonal experiences
+- Lesser-known neighborhoods
+- Local-only spots`}
+
+==============================
+SIGNATURE EXPERIENCE REQUIREMENT
+==============================
+
+Each trip MUST include at least ONE "Signature Moment" (preferably on middle days):
+- Emotionally memorable
+- Unique to the destination
+- Aligned with trip intent (${tripIntent})
+- Something they'll remember forever
+
+${isMiddleDay ? `DAY ${dayNumber} IS A MIDDLE DAY - IDEAL FOR SIGNATURE EXPERIENCES.
+Consider including THE signature moment here if not yet planned.` : ''}
+${isArrivalDay ? 'Day 1 is NOT ideal for signature experiences (travelers are tired from journey).' : ''}
+${isDepartureDay ? 'Last day is NOT ideal for signature experiences (keep it light and stress-free).' : ''}
+
+Signature Experience Ideas by Trip Intent:
+${tripIntent === 'honeymoon' ? '- Private sunset dinner, couples spa, romantic boat ride, stargazing' : ''}
+${tripIntent === 'celebration' ? '- Cake cutting at scenic spot, group photo session, special dinner, surprise activity' : ''}
+${tripIntent === 'adventure' ? '- Peak summit, waterfall rappelling, wildlife safari highlight, extreme sport' : ''}
+${tripIntent === 'spiritual' ? '- Temple darshan at auspicious time, meditation session, aarti ceremony, holy dip' : ''}
+${tripIntent === 'exploration' ? '- Local home visit, artisan workshop, heritage walk with historian, cooking class' : ''}
+${tripIntent === 'relaxation' ? '- Spa day, private beach time, yoga at sunrise, nature retreat' : ''}
+
+==============================
+MICRO-DELIGHT RULE
+==============================
+
+Each day may include ONE optional micro-surprise:
+- A hidden chai stop
+- A secret viewpoint
+- A local dessert
+- A street food gem
+
+Optional, never forced. Only if it fits naturally.
+
+==============================
+FAIL-SAFE LOGIC
+==============================
+
+For each day, include:
+- At least one backup activity triggered by rain, fatigue, or crowds.
+- Alternative indoor options if weather is bad.
+- Rest spots if energy is low.
+
+────────────────────────────────────────
+TIME & LOGISTICS REALITY
+────────────────────────────────────────
+
+• ${isArrivalDay ? `Arrival at ${arrivalTime} - Add 1-2 hour buffer before first activity for check-in/freshening up` : ''}
+• ${isDepartureDay ? `Departure at ${departureTime} - End ALL activities 4 hours before this time` : ''}
+• Respect hotel check-in (typically 12-2 PM)
+• Do NOT crisscross the city — geo-cluster activities by area
+${isMetroCity ? '• METRO CITY: Assume heavy traffic. Add 30% buffer to travel times. Plan nearby places.' : ''}
+• Include realistic travel time between activities
+
+────────────────────────────────────────
+CRITICAL REQUIREMENTS
+────────────────────────────────────────
+
+${useFixedActivities 
+  ? `1. Generate EXACTLY ${activitiesPerDay} activities for Day ${dayNumber} (user override)` 
+  : `1. Generate 1-${energyCapacity.maxActivities} activities based on energy (${energyCapacity.level}). STOP when day feels complete.`}
 2. Each activity MUST have a precise time (format: "HH:MM" like "08:30", "14:15", "19:00")
-3. Distribute activities logically:
-   - Morning: 6:00 AM - 11:00 AM
-   - Afternoon: 11:00 AM - 5:00 PM  
-   - Evening: 5:00 PM - 10:00 PM
-4. Include detailed transport information (walking distance, local cab, auto-rickshaw, etc.)
-5. Add food/cafe recommendations at appropriate meal times
-6. Include local hidden gems or lesser-known spots if applicable
-7. Consider weather conditions when planning timing and activity types
-8. Provide realistic costs in INR (no symbols)
-9. Whenever possible, schedule any remaining must-visit destinations and specific requested activities that have not yet been covered on previous days, ensuring they appear in the overall trip.
+3. Distribute activities naturally across available time:
+   ${isArrivalDay ? `- Start AFTER ${arrivalTime} + check-in buffer` : '- Morning: 8:00 AM - 12:00 PM'}
+   - Afternoon: 12:00 PM - 5:00 PM  
+   ${isDepartureDay ? `- End by ${parseInt(departureTime.split(':')[0]) - 4}:00 (4 hours before departure)` : `- Evening: 5:00 PM - ${groupType === 'family-kids' ? '8:00 PM (family curfew)' : '10:00 PM'}`}
+4. Include detailed transport information${isMetroCity ? ' - Add 30% traffic buffer' : ''}
+5. Add food/cafe recommendations respecting ${foodPreference} preference
+6. Consider activity INTENSITY - don't stack high-intensity activities
+7. ${weatherData ? 'Adjust for weather conditions' : 'Plan weather-appropriate activities'}
+8. Provide realistic costs in INR
+9. ${culturalNotesRequired ? 'Include cultural context and etiquette tips' : ''}
+10. ${isFirstVisit ? 'Include at least one iconic must-see experience' : 'Focus on hidden gems'}
+11. ${planRigidity === 'flexible' ? 'Include buffer time and flexibility' : planRigidity === 'strict' ? 'Precise timings' : 'Balanced pacing'}
+
+==============================
+HUMAN REALITY CHECKLIST (VERIFY ALL)
+==============================
+
+Before generating, verify:
+□ ${isArrivalDay ? 'Day 1 is LIGHT (no packed schedule)' : isDepartureDay ? 'Last day ends 4+ hours before departure' : 'Middle day has peak experiences'}
+□ Activities are geographically clustered (no crisscrossing)
+□ ${groupType === 'family-kids' ? 'No activities after 8 PM' : groupType === 'friends' ? 'No boring museums or early mornings' : groupType === 'couples' ? 'No crowded group tours' : 'Opportunities to meet people'}
+□ ${isMonday ? 'NO museums or zoos (Monday closure)' : 'Open attractions only'}
+□ ${weatherData && weatherData.temperature > 30 ? 'No outdoor activities 12-4 PM' : 'Weather-appropriate activities'}
+□ ${foodPreference !== 'no-preference' ? `All food is ${foodPreference}` : 'Food preferences respected'}
+□ ${isFirstVisit ? 'At least 1 iconic experience included' : 'Focus on new experiences'}
+□ ${tripTheme} theme is consistent throughout
+□ Backup activity exists for rain/fatigue/crowds
+□ Realistic travel times${isMetroCity ? ' (+30% buffer for traffic)' : ''}
+
+==============================
+FINAL HUMAN APPROVAL SIMULATION
+==============================
+
+Before finalizing, ask yourself:
+1. "Would this trip feel fun, comfortable, and worth the money for a ${groupType} group with ${tripIntent} intent?"
+2. "Does this day feel like a natural part of a ${tripTheme} trip?"
+3. "Would a real human with real energy levels enjoy this?"
+4. "Are there any moments where they might feel rushed, lost, or disappointed?"
+
+If ANY day feels:
+- Boring → Add excitement matching the theme
+- Stressful → Remove activities or add buffer time
+- Rushed → Reduce activities or extend timings
+- Mismatched → Realign with user profile
+- Exhausting → Add rest periods
+
+FIX IT before outputting.
 
 OUTPUT JSON SCHEMA (follow exactly):
 {
   "day": ${dayNumber},
-  "header": "Creative day title (e.g., 'Cultural Heritage & Local Flavors')",
+  "header": "Creative day title that matches the ${tripTheme} theme",
   "date": "${date}",
+  "dayType": "${isArrivalDay ? 'arrival' : isDepartureDay ? 'departure' : 'middle'}",
+  "energyLevel": "${energyCapacity.level}",
+  "energyCapacity": {
+    "level": "${energyCapacity.level}",
+    "maxActivities": ${targetActivities},
+    "description": "${energyCapacity.description}"
+  },
+  "themeConsistency": "${tripTheme}",
+  ${isArrivalDay ? `"arrivalTime": "${arrivalTime}",` : ''}
+  ${isDepartureDay ? `"departureTime": "${departureTime}",` : ''}
   ${weatherData ? `"weather": {
     "temperature": ${weatherData.temperature},
     "condition": "${weatherData.condition}",
@@ -1141,25 +1998,52 @@ OUTPUT JSON SCHEMA (follow exactly):
       {
         "name": "Activity name",
         "time": "08:30",
-        "description": "Detailed description of what to do and see here",
+        "description": "Detailed description",
         "location": "Specific address or area",
         "duration": "1-2 hours",
+        "intensity": "low / medium / high",
         "costINR": 500,
         "travelDistanceKm": 2.5,
         "transportMode": "local cab / walking / auto-rickshaw",
         "transportCostINR": 150,
-        "foodRecommendation": "Nearby cafe/restaurant name (if applicable)",
-        "highlights": "Key things to notice or experience",
-        "tips": "Practical tips (best photo spots, what to bring, etc.)",
-        "bestTimeToVisit": "Specific time window",
-        "whatToExpect": "What visitors typically experience",
-        "localInsight": "Hidden gem tip or local secret (if applicable)"
+        "foodRecommendation": "Nearby restaurant (${foodPreference})",
+        "highlights": "Key experiences",
+        "tips": "Practical tips",
+        "whyThisFitsGroup": "Why this activity suits ${groupType}",
+        "isSignatureExperience": false,
+        "isIconicMustSee": false
+        ${culturalNotesRequired ? ',"culturalNotes": "Local customs and etiquette"' : ''}
       }
     ],
     "afternoon": [...],
     "evening": [...]
   },
-  "aiTip": "Day-specific tip considering weather and context",
+  "microDelight": {
+    "name": "Hidden gem / local surprise",
+    "description": "Brief description",
+    "location": "Where to find it",
+    "costINR": 50
+  },
+  "backupActivities": [
+    {
+      "name": "Backup option",
+      "trigger": "rain / fatigue / crowds",
+      "description": "What to do instead",
+      "intensity": "low",
+      "location": "Where"
+    }
+  ],
+  "signatureExperience": ${isMiddleDay ? '{ "name": "Signature moment", "description": "Why special", "emotionalValue": "Memorable because..." }' : 'null'},
+  "whyThisDayWorks": "Human reasoning for why this day plan makes sense for ${groupType} on a ${tripIntent} trip",
+  "humanRealityCheck": {
+    "totalActivities": "number of activities planned",
+    "energyUsed": "${energyCapacity.level}",
+    "fatigueRisk": "${isArrivalDay ? 'high (just arrived)' : isDepartureDay ? 'must-avoid (departure stress)' : 'manageable'}",
+    "paceDescription": "${isArrivalDay ? 'Very light start' : isDepartureDay ? 'Relaxed wind-down' : 'Active exploration'}",
+    "groupFit": "Why this fits ${groupType}",
+    "moodMatch": "How this matches ${tripTheme} theme"
+  },
+  "aiTip": "Day-specific tip for ${groupType}",
   "totalDayCostINR": 3500,
   "breakdown": {
     "transport": 500,
@@ -1169,13 +2053,40 @@ OUTPUT JSON SCHEMA (follow exactly):
   }
 }
 
-IMPORTANT:
-- Total activities across morning + afternoon + evening = exactly ${activitiesPerDay}
-- Times should be realistic and account for travel between locations
-- Include meal recommendations at breakfast, lunch, and dinner times
-- Provide specific transport details (mode, cost, duration)
-- Add local insights and hidden gems where possible
-- Ensure totalDayCostINR matches sum of all activity costs + transport + food`;
+────────────────────────────────────────
+FINAL HUMAN APPROVAL SIMULATION
+────────────────────────────────────────
+
+Before finalizing, ask yourself:
+
+"Would a real group of ${groupType} on a ${tripIntent} trip feel excited, comfortable, and satisfied with this day?"
+
+If any day feels:
+• Forced → Remove activities
+• Overpacked → Reduce to fit energy level
+• Boring → Add excitement matching the theme
+• Unrealistic → Fix logistics and timing
+
+FIX IT BEFORE OUTPUT.
+
+────────────────────────────────────────
+OUTPUT RULES
+────────────────────────────────────────
+
+${useFixedActivities 
+  ? `- Generate exactly ${activitiesPerDay} activities (user override)` 
+  : `- Generate 1-${energyCapacity.maxActivities} activities naturally. STOP when day feels complete.`}
+- Times must be realistic with travel buffers${isMetroCity ? ' (+30% for metro traffic)' : ''}
+- Include meal recommendations (${foodPreference})
+- Provide transport details (mode, cost, duration)
+- Add local insights and micro-delights
+- Ensure totalDayCostINR matches sum of all costs
+- ALWAYS include backup activities
+- Mark signature experiences and iconic must-sees
+- Include "humanRealityCheck" with accurate energy assessment
+- Include "whyThisDayWorks" explanation
+
+Return ONLY valid JSON. No explanations. No markdown wrapping.`;
 
   try {
     const completion = await openai.chat.completions.create({
@@ -1183,7 +2094,38 @@ IMPORTANT:
       messages: [
         { 
           role: "system", 
-          content: `You are an expert Indian travel planner specializing in detailed day-by-day itineraries. Always return STRICT JSON per the provided schema. Focus on authentic local experiences, precise timings, practical transport advice, and hidden gems.` 
+          content: `You are a HUMAN-AWARE TRAVEL PLANNING ENGINE — not just an itinerary generator.
+
+You understand that:
+- Humans get tired, especially on Day 1 after travel
+- Emotions matter — trips should FEEL right, not just look right on paper
+- Logistics can make or break a trip — traffic, check-in times, weather all matter
+- Different groups (friends/couples/families/solo) have fundamentally different needs
+- The energy curve of a trip matters: warm-up → peak → wind-down
+- Nobody wants to regret missing iconic experiences on their first visit
+- Mood consistency across days prevents "whiplash" experiences
+- User preferences and travel styles are MANDATORY requirements, not suggestions
+- Seasonal conditions can make activities unsafe, unavailable, or unpleasant
+- Every activity MUST align with the user's stated style, intent, interests, and seasonal conditions
+
+CRITICAL SEASONAL AWARENESS:
+- Beach activities during monsoon = UNSAFE (rough seas, closed facilities)
+- High-altitude trips during peak winter = INACCESSIBLE (roads closed, extreme cold)
+- Desert activities during peak summer = DANGEROUS (heat stroke risk, 45-50°C)
+- Outdoor sightseeing during heat waves = UNCOMFORTABLE and potentially unsafe
+- Mountain roads during monsoon = RISKY (landslides)
+
+Before including ANY activity, validate:
+1. Is it safe in this season?
+2. Is it available/accessible?
+3. Will weather conditions allow enjoyment?
+
+If NO to any → either skip it, modify it (indoor alternative), or add explicit warnings.
+
+Your job is to create trips that feel HUMAN — realistic, emotionally satisfying, safe, and stress-free.
+Plans must be PERSONALIZED to user's specific style and preferences, not generic templates.
+
+ALWAYS return STRICT JSON per the provided schema. No explanations, no markdown, just valid JSON.` 
         },
         { role: "user", content: prompt }
       ],
@@ -1226,20 +2168,82 @@ IMPORTANT:
 // AI Trip Planning endpoint (returns structured JSON) - NOW WITH PER-DAY GENERATION
 app.post('/api/ai/plan-trip', async (req, res) => {
   try {
-    const { from, to, startDate, endDate, budget, travelers, interests, customDestinations, customActivities, activitiesPerDay, tripStyle } = req.body;
-
-    // Calculate duration
+    const { from, to, startDate, endDate, budget, travelers, interests, customDestinations, customActivities, activitiesPerDay, tripStyle, groupType, tripIntent, budgetTier, comfortLevel, crowdTolerance, foodPreference, planRigidity, culturalNotesRequired, travelMaturity, isFirstVisit, arrivalTime, departureTime, vibePreference } = req.body;
+    
+    // Calculate duration and travel month
     const start = new Date(startDate);
     const end = new Date(endDate);
     const durationDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    const travelMonth = start.getMonth() + 1; // 1-12
+    
+    // SEASONAL VALIDATION - Check if trip is safe for the season
+    console.log(`🌍 Validating seasonal compatibility: ${to} in ${getMonthName(travelMonth)}...`);
+    const seasonalValidation = validateSeasonalCompatibility(to, travelMonth);
+    
+    // Log warnings to console
+    if (seasonalValidation.warnings.length > 0) {
+      console.log('⚠️  SEASONAL WARNINGS:');
+      seasonalValidation.warnings.forEach(w => console.log(`   - ${w}`));
+    }
+    if (seasonalValidation.suggestions.length > 0) {
+      console.log('💡 SEASONAL SUGGESTIONS:');
+      seasonalValidation.suggestions.forEach(s => console.log(`   - ${s}`));
+    }
+    
+    // If destination is unsafe for the season, return error with alternatives
+    if (seasonalValidation.severity === 'unsafe') {
+      return res.json({
+        success: false,
+        error: 'Unsafe seasonal conditions',
+        seasonalValidation: seasonalValidation,
+        message: `${to} is not safe to visit in ${getMonthName(travelMonth)}. ${seasonalValidation.warnings.join(' ')} ${seasonalValidation.suggestions.join(' ')}`
+      });
+    }
+    
+    // Derive trip theme for consistency guard (prevents mood whiplash between days)
+    const deriveTripTheme = (): string => {
+      // Party theme
+      if (groupType === 'friends' && (tripStyle === 'adventure' || tripIntent === 'celebration')) {
+        return 'party';
+      }
+      // Romantic theme
+      if (groupType === 'couples' && (tripIntent === 'honeymoon' || tripIntent === 'celebration')) {
+        return 'romantic';
+      }
+      // Relaxed theme
+      if (tripStyle === 'relaxing' || tripIntent === 'relaxation' || planRigidity === 'flexible') {
+        return 'relaxed';
+      }
+      // Explorer theme
+      if (tripIntent === 'exploration' || tripIntent === 'adventure' || tripStyle === 'adventure') {
+        return 'explorer';
+      }
+      // Mixed/balanced theme
+      return 'mixed';
+    };
+    
+    const tripTheme = deriveTripTheme();
     
     console.log(`📅 Generating ${durationDays}-day trip plan with ${activitiesPerDay} activities per day`);
     console.log(`📍 From: ${from} → To: ${to}`);
+    console.log(`🎯 Trip Theme: ${tripTheme}`);
+    console.log(`👥 Group: ${groupType} | Intent: ${tripIntent} | Style: ${tripStyle}`);
 
     // Fetch weather data for all days
     console.log('🌤️  Fetching weather data for:', to);
-    const weatherForecast = await fetchWeatherForecast(to, startDate, endDate);
-    console.log(`✅ Weather forecast received: ${weatherForecast.length} days`);
+    let weatherForecast: WeatherData[] = [];
+    try {
+      weatherForecast = await fetchWeatherForecast(to, startDate, endDate);
+      if (weatherForecast && weatherForecast.length > 0) {
+        console.log(`✅ Weather forecast received: ${weatherForecast.length} days`);
+        console.log(`📊 Sample weather for Day 1:`, weatherForecast[0]);
+      } else {
+        console.warn('⚠️  Weather forecast returned empty array - weather data will not be available in plans');
+      }
+    } catch (weatherError) {
+      console.error('❌ Weather fetch failed:', weatherError);
+      console.warn('⚠️  Continuing without weather data - plans will still generate');
+    }
 
     // Generate plans for each day sequentially (with context from previous days)
     const allDays: any[] = [];
@@ -1276,13 +2280,29 @@ app.post('/api/ai/plan-trip', async (req, res) => {
           customActivities: customActivities || [],
           activitiesPerDay: activitiesPerDay || 3,
           tripStyle: tripStyle || '',
+          groupType: groupType || 'friends',
+          tripIntent: tripIntent || 'exploration',
+          budgetTier: budgetTier || 'mid-range',
+          comfortLevel: comfortLevel || 'comfortable',
+          crowdTolerance: crowdTolerance || 'moderate',
+          foodPreference: foodPreference || 'no-preference',
+          planRigidity: planRigidity || 'balanced',
+          culturalNotesRequired: culturalNotesRequired || false,
+          travelMaturity: travelMaturity || 'first_timer',
+          isFirstVisit: isFirstVisit !== false,
+          tripTheme: tripTheme,
+          arrivalTime: arrivalTime || '12:00',
+          departureTime: departureTime || '18:00',
+          vibePreference: vibePreference || 'balanced',
           weatherData: dayWeather || undefined,
           previousDaysSummary: previousDaysSummary || undefined,
-          remainingBudget: remainingBudget
+          remainingBudget: remainingBudget,
+          travelMonth: travelMonth,
+          seasonalValidation: seasonalValidation
         });
         
-        // Add weather data if not included by AI
-        if (dayWeather && (!dayPlan.weather || !dayPlan.weather.temperature)) {
+        // Add weather data if not included by AI (ensure it's always added if available)
+        if (dayWeather) {
           dayPlan.weather = {
             temperature: dayWeather.temperature,
             condition: dayWeather.condition,
@@ -1291,6 +2311,9 @@ app.post('/api/ai/plan-trip', async (req, res) => {
             humidity: dayWeather.humidity,
             windSpeed: dayWeather.windSpeed
           };
+          console.log(`   ✅ Weather added for Day ${dayNum}: ${dayWeather.temperature}°C ${dayWeather.condition}`);
+        } else {
+          console.log(`   ⚠️  No weather data available for Day ${dayNum}`);
         }
         
         // Ensure date is set
@@ -1400,7 +2423,14 @@ app.post('/api/ai/plan-trip', async (req, res) => {
       overview,
       days: allDays,
       totals,
-      budgetWarning
+      budgetWarning,
+      seasonalInfo: {
+        month: getMonthName(travelMonth),
+        destination: to,
+        severity: seasonalValidation.severity,
+        warnings: seasonalValidation.warnings,
+        suggestions: seasonalValidation.suggestions
+      }
     };
 
     // Send response
@@ -2119,6 +3149,412 @@ app.post('/api/bookings/select-hotel', async (req, res) => {
       success: false,
       error: 'Failed to save hotel selection',
       message: 'Please try again later'
+    });
+  }
+});
+
+// SMS Alert Endpoint (using TextBee)
+app.post('/api/send-sms', async (req, res) => {
+  try {
+    const { to, message } = req.body;
+
+    if (!to || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: to, message'
+      });
+    }
+
+    if (!textbeeConfigured) {
+      return res.status(503).json({
+        success: false,
+        error: 'SMS service not configured. Please add TEXTBEE_API_KEY and TEXTBEE_DEVICE_ID to .env'
+      });
+    }
+
+    // Normalize phone number (remove + if present, TextBee handles country codes)
+    let phoneNumber = to.replace(/[^\d+]/g, '');
+    if (!phoneNumber.startsWith('+')) {
+      // Add +91 for Indian numbers if missing
+      if (phoneNumber.startsWith('91')) {
+        phoneNumber = '+' + phoneNumber;
+      } else {
+        phoneNumber = '+91' + phoneNumber;
+      }
+    }
+
+    console.log(`📱 Sending SMS via TextBee to ${phoneNumber}...`);
+
+    // Send SMS via TextBee API
+    const response = await axios.post(
+      `${TEXTBEE_BASE_URL}/gateway/devices/${TEXTBEE_DEVICE_ID}/send-sms`,
+      {
+        recipients: [phoneNumber],
+        message: message,
+      },
+      {
+        headers: {
+          'x-api-key': TEXTBEE_API_KEY,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    console.log(`✅ SMS sent successfully to ${phoneNumber} via TextBee`);
+
+    res.json({
+      success: true,
+      message: 'SMS sent successfully',
+      data: response.data
+    });
+  } catch (error: any) {
+    console.error('SMS Send Error:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send SMS',
+      message: error.response?.data?.message || error.message || 'Please check your TextBee configuration and try again'
+    });
+  }
+});
+
+// WhatsApp Alert Endpoint (Disabled - SMS only)
+app.post('/api/send-whatsapp', async (_req, res) => {
+  res.status(503).json({
+    success: false,
+    error: 'WhatsApp service is disabled. Using SMS only.'
+  });
+});
+
+// ============================================
+// SOS SESSION & ACKNOWLEDGEMENT TRACKING
+// ============================================
+
+// Create a new SOS session
+app.post('/api/sos/session', async (req, res) => {
+  try {
+    const { userId, userName, groupId, location, emergencyContacts } = req.body;
+
+    if (!userId || !userName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: userId, userName'
+      });
+    }
+
+    // For now, store in memory (in production, use Supabase)
+    const sessionId = `sos-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    const session = {
+      id: sessionId,
+      userId,
+      userName,
+      groupId,
+      status: 'active',
+      startedAt: new Date().toISOString(),
+      lastLocation: location,
+      lastLocationUpdate: new Date().toISOString(),
+      locationUpdateCount: 0,
+      emergencyContacts: emergencyContacts || [],
+      acknowledgements: []
+    };
+
+    // Store session in memory (for prototype)
+    sosSessions[sessionId] = session;
+
+    // Also store by phone number for reverse lookup
+    for (const contact of emergencyContacts || []) {
+      const normalizedPhone = contact.phone.replace(/[^\d]/g, '');
+      sosSessionsByPhone[normalizedPhone] = sessionId;
+    }
+
+    console.log(`🆘 SOS Session created: ${sessionId} for ${userName}`);
+
+    res.json({
+      success: true,
+      sessionId,
+      session
+    });
+  } catch (error: any) {
+    console.error('Error creating SOS session:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create SOS session'
+    });
+  }
+});
+
+// Get SOS session status
+app.get('/api/sos/session/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const session = sosSessions[sessionId];
+    
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      session
+    });
+  } catch (error: any) {
+    console.error('Error fetching SOS session:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch SOS session'
+    });
+  }
+});
+
+// Cancel/End SOS session
+app.post('/api/sos/session/:sessionId/cancel', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const session = sosSessions[sessionId];
+    
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    session.status = 'cancelled';
+    session.endedAt = new Date().toISOString();
+
+    console.log(`🛑 SOS Session cancelled: ${sessionId}`);
+
+    res.json({
+      success: true,
+      session
+    });
+  } catch (error: any) {
+    console.error('Error cancelling SOS session:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to cancel SOS session'
+    });
+  }
+});
+
+// TextBee Webhook - Receive incoming SMS replies
+// TextBee can send data in different formats, handle all possibilities
+app.post('/api/textbee/webhook', async (req, res) => {
+  try {
+    console.log('📨 TextBee webhook received:');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
+    // TextBee might send data in different formats
+    // Try multiple field names
+    const from = req.body.from || req.body.sender || req.body.phoneNumber || req.body.phone || req.body.senderNumber;
+    const message = req.body.message || req.body.text || req.body.body || req.body.content || req.body.sms;
+    const timestamp = req.body.timestamp || req.body.receivedAt || req.body.time || new Date().toISOString();
+
+    console.log(`📱 Parsed: from=${from}, message=${message}`);
+
+    if (!from || !message) {
+      console.log('⚠️ Missing from or message in webhook');
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received but missing from/message fields'
+      });
+    }
+
+    // Normalize phone number for lookup (remove all non-digits)
+    const normalizedPhone = from.replace(/[^\d]/g, '');
+    // Also try without country code
+    const phoneWithoutCountryCode = normalizedPhone.replace(/^91/, '');
+    
+    console.log(`🔍 Looking for phone: ${normalizedPhone} or ${phoneWithoutCountryCode}`);
+    console.log(`📋 Active phone mappings:`, JSON.stringify(sosSessionsByPhone, null, 2));
+    
+    // Find the SOS session this contact belongs to
+    let sessionId = sosSessionsByPhone[normalizedPhone] || sosSessionsByPhone[phoneWithoutCountryCode];
+    
+    // Also try to find by iterating
+    if (!sessionId) {
+      for (const [phone, sid] of Object.entries(sosSessionsByPhone)) {
+        const cleanPhone = phone.replace(/[^\d]/g, '');
+        if (cleanPhone.endsWith(phoneWithoutCountryCode) || phoneWithoutCountryCode.endsWith(cleanPhone)) {
+          sessionId = sid;
+          break;
+        }
+      }
+    }
+    
+    if (!sessionId) {
+      console.log(`⚠️ No active SOS session found for phone: ${normalizedPhone}`);
+      return res.json({
+        success: true,
+        message: 'No active session for this contact'
+      });
+    }
+
+    const session = sosSessions[sessionId];
+    
+    if (!session || session.status !== 'active') {
+      console.log(`⚠️ SOS session not active: ${sessionId}`);
+      return res.json({
+        success: true,
+        message: 'Session not active'
+      });
+    }
+
+    // Parse the response message
+    const upperMessage = message.toUpperCase().trim();
+    let responseType = 'other';
+    
+    if (upperMessage.includes('SAFE') || upperMessage.includes('OK') || upperMessage === 'YES') {
+      responseType = 'safe';
+    } else if (upperMessage.includes('ON MY WAY') || upperMessage.includes('COMING') || upperMessage.includes('OMW')) {
+      responseType = 'on_my_way';
+    } else if (upperMessage.includes('RECEIVED') || upperMessage.includes('GOT IT') || upperMessage.includes('NOTED')) {
+      responseType = 'received';
+    }
+
+    // Find contact name
+    const contact = session.emergencyContacts.find((c: any) => {
+      const contactPhone = c.phone.replace(/[^\d]/g, '');
+      return contactPhone.includes(phoneWithoutCountryCode) || phoneWithoutCountryCode.includes(contactPhone);
+    });
+    const contactName = contact?.name || 'Unknown Contact';
+
+    // Add acknowledgement
+    const acknowledgement = {
+      id: `ack-${Date.now()}`,
+      contactName,
+      contactPhone: from,
+      responseType,
+      responseMessage: message,
+      acknowledgedAt: timestamp
+    };
+
+    session.acknowledgements.push(acknowledgement);
+
+    console.log(`✅ Acknowledgement received from ${contactName}: ${responseType} - "${message}"`);
+
+    // Emit real-time update via Socket.io
+    io.emit(`sos-acknowledgement-${sessionId}`, acknowledgement);
+
+    res.json({
+      success: true,
+      acknowledgement
+    });
+  } catch (error: any) {
+    console.error('Error processing TextBee webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process webhook'
+    });
+  }
+});
+
+// Test endpoint to manually add acknowledgement (for testing without webhook)
+app.post('/api/sos/test-acknowledgement', async (req, res) => {
+  try {
+    const { sessionId, contactName, contactPhone, responseType, responseMessage } = req.body;
+
+    console.log(`🧪 Test acknowledgement for session: ${sessionId}`);
+
+    const session = sosSessions[sessionId];
+    
+    if (!session) {
+      // Find the latest active session
+      const activeSessionId = Object.keys(sosSessions).find(id => sosSessions[id].status === 'active');
+      if (!activeSessionId) {
+        return res.status(404).json({
+          success: false,
+          error: 'No active SOS session found'
+        });
+      }
+      
+      const activeSession = sosSessions[activeSessionId];
+      const acknowledgement = {
+        id: `ack-${Date.now()}`,
+        contactName: contactName || activeSession.emergencyContacts[0]?.name || 'Test Contact',
+        contactPhone: contactPhone || activeSession.emergencyContacts[0]?.phone || '+910000000000',
+        responseType: responseType || 'safe',
+        responseMessage: responseMessage || 'I am safe',
+        acknowledgedAt: new Date().toISOString()
+      };
+
+      activeSession.acknowledgements.push(acknowledgement);
+      io.emit(`sos-acknowledgement-${activeSessionId}`, acknowledgement);
+
+      console.log(`✅ Test acknowledgement added to session ${activeSessionId}`);
+
+      return res.json({
+        success: true,
+        sessionId: activeSessionId,
+        acknowledgement
+      });
+    }
+
+    const acknowledgement = {
+      id: `ack-${Date.now()}`,
+      contactName: contactName || session.emergencyContacts[0]?.name || 'Test Contact',
+      contactPhone: contactPhone || session.emergencyContacts[0]?.phone || '+910000000000',
+      responseType: responseType || 'safe',
+      responseMessage: responseMessage || 'I am safe',
+      acknowledgedAt: new Date().toISOString()
+    };
+
+    session.acknowledgements.push(acknowledgement);
+    io.emit(`sos-acknowledgement-${sessionId}`, acknowledgement);
+
+    console.log(`✅ Test acknowledgement added`);
+
+    res.json({
+      success: true,
+      acknowledgement
+    });
+  } catch (error: any) {
+    console.error('Error adding test acknowledgement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add test acknowledgement'
+    });
+  }
+});
+
+// Debug endpoint to see all active sessions
+app.get('/api/sos/debug', async (_req, res) => {
+  res.json({
+    success: true,
+    sessions: sosSessions,
+    phoneMapping: sosSessionsByPhone
+  });
+});
+
+// Get all acknowledgements for a session
+app.get('/api/sos/session/:sessionId/acknowledgements', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const session = sosSessions[sessionId];
+    
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      acknowledgements: session.acknowledgements || []
+    });
+  } catch (error: any) {
+    console.error('Error fetching acknowledgements:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch acknowledgements'
     });
   }
 });

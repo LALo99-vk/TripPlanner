@@ -843,7 +843,7 @@ const ProfilePage: React.FC = () => {
                         const evt = new CustomEvent('navigate', { detail: { page: 'plan' } });
                         window.dispatchEvent(evt as any);
                       }}
-                      className="premium-button-primary"
+                      className="premium-button-primary touch-manipulation touch-target active-scale"
                     >
                       Plan My Trip
                     </button>
@@ -897,7 +897,7 @@ const ProfilePage: React.FC = () => {
                     <p className="text-secondary mb-4">Share your travel experiences to get started!</p>
                     <button 
                       onClick={() => setShowPostModal(true)}
-                      className="premium-button-primary"
+                      className="premium-button-primary touch-manipulation touch-target active-scale"
                     >
                       Share Your First Trip
                     </button>
@@ -907,7 +907,7 @@ const ProfilePage: React.FC = () => {
                     <div className="mb-4 flex justify-end">
                       <button
                         onClick={() => setShowPostModal(true)}
-                        className="premium-button-primary flex items-center gap-2"
+                        className="premium-button-primary touch-manipulation touch-target active-scale flex items-center gap-2"
                       >
                         <Camera className="h-4 w-4" />
                         New Post
@@ -1016,7 +1016,7 @@ const ProfilePage: React.FC = () => {
                         const evt = new CustomEvent('navigate', { detail: { page: 'discover' } });
                         window.dispatchEvent(evt as any);
                       }}
-                      className="premium-button-primary"
+                      className="premium-button-primary touch-manipulation touch-target active-scale"
                     >
                       Discover Posts
                     </button>

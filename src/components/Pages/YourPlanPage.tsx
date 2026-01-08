@@ -25,7 +25,13 @@ const YourPlanPage: React.FC = () => {
   // Log weather data for debugging
   useEffect(() => {
     console.log('Weather data status:', { destination, forecast, loading, error });
-  }, [destination, forecast, loading, error]);
+    if (plan && plan.days) {
+      console.log('Plan weather check:');
+      plan.days.forEach(day => {
+        console.log(`  Day ${day.day}:`, day.weather ? `${day.weather.temperature}°C ${day.weather.condition}` : 'NO WEATHER DATA');
+      });
+    }
+  }, [destination, forecast, loading, error, plan]);
 
   useEffect(() => {
     const unsub = planStore.subscribe(() => setPlan(planStore.getPlan()));
@@ -122,20 +128,20 @@ const YourPlanPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="content-container space-y-6">
-        <div className="glass-card p-6">
-          <div className="flex items-center justify-between">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe">
+      <div className="content-container space-y-4 sm:space-y-6">
+        <div className="glass-card p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
-              <div className="text-2xl font-bold text-primary mb-1">Your Plan</div>
-              <div className="text-secondary">{plan.overview.from} → {plan.overview.to} • {plan.overview.durationDays} Days • ₹{plan.overview.budgetINR.toLocaleString('en-IN')}</div>
-              <div className="text-secondary mt-1">Travellers: {plan.overview.travelers} • Interests: {plan.overview.interests.join(', ')}</div>
+              <div className="text-xl sm:text-2xl font-bold text-primary mb-1">Your Plan</div>
+              <div className="text-sm sm:text-base text-secondary">{plan.overview.from} → {plan.overview.to} • {plan.overview.durationDays} Days • ₹{plan.overview.budgetINR.toLocaleString('en-IN')}</div>
+              <div className="text-sm sm:text-base text-secondary mt-1">Travellers: {plan.overview.travelers} • Interests: {plan.overview.interests.join(', ')}</div>
             </div>
-            <div className="flex gap-2">
-              <button onClick={handleDownloadPdf} className="premium-button-primary px-4 py-2 rounded-xl flex items-center"><Download className="h-4 w-4 mr-2"/>Download PDF</button>
-              <button onClick={handleShareLink} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Link2 className="h-4 w-4 mr-2"/>Share Link</button>
-              <button onClick={handleSaveProfile} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Save className="h-4 w-4 mr-2"/>Save (Local)</button>
-              <button onClick={handleSaveToFirestore} className="premium-button-secondary px-4 py-2 rounded-xl flex items-center"><Save className="h-4 w-4 mr-2"/>Save to Profile</button>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              <button onClick={handleDownloadPdf} className="premium-button-primary px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl flex items-center text-sm sm:text-base touch-manipulation touch-target active-scale"><Download className="h-4 w-4 mr-2"/>Download PDF</button>
+              <button onClick={handleShareLink} className="premium-button-secondary px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl flex items-center text-sm sm:text-base touch-manipulation touch-target active-scale"><Link2 className="h-4 w-4 mr-2"/>Share</button>
+              <button onClick={handleSaveProfile} className="premium-button-secondary px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl flex items-center text-sm sm:text-base touch-manipulation touch-target active-scale"><Save className="h-4 w-4 mr-2"/>Local</button>
+              <button onClick={handleSaveToFirestore} className="premium-button-secondary px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl flex items-center text-sm sm:text-base touch-manipulation touch-target active-scale"><Save className="h-4 w-4 mr-2"/>Profile</button>
             </div>
           </div>
           {plan.overview.summary && (
@@ -143,9 +149,59 @@ const YourPlanPage: React.FC = () => {
           )}
         </div>
 
-        <div className="glass-card p-6">
-          <div className="text-lg font-semibold mb-2">Total Trip Cost: ₹{plan.totals.totalCostINR.toLocaleString('en-IN')}</div>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+        {/* Seasonal Information Card */}
+        {plan.seasonalInfo && (plan.seasonalInfo.warnings.length > 0 || plan.seasonalInfo.suggestions.length > 0) && (
+          <div className={`glass-card p-4 sm:p-6 border-2 ${
+            plan.seasonalInfo.severity === 'unsafe' ? 'border-red-500/50 bg-red-500/10' :
+            plan.seasonalInfo.severity === 'caution' ? 'border-yellow-500/50 bg-yellow-500/10' :
+            'border-green-500/50 bg-green-500/10'
+          }`}>
+            <div className="flex items-start gap-3">
+              <span className="text-2xl sm:text-3xl">
+                {plan.seasonalInfo.severity === 'unsafe' ? '⚠️' :
+                 plan.seasonalInfo.severity === 'caution' ? '⚡' :
+                 '✅'}
+              </span>
+              <div className="flex-1">
+                <div className="text-lg sm:text-xl font-bold text-primary mb-2">
+                  {plan.seasonalInfo.severity === 'unsafe' ? 'Seasonal Safety Warning' :
+                   plan.seasonalInfo.severity === 'caution' ? 'Seasonal Advisory' :
+                   'Good Seasonal Timing'}
+                </div>
+                <div className="text-sm sm:text-base text-secondary mb-1">
+                  Traveling to <span className="font-semibold">{plan.seasonalInfo.destination}</span> in <span className="font-semibold">{plan.seasonalInfo.month}</span>
+                </div>
+                
+                {plan.seasonalInfo.warnings.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {plan.seasonalInfo.warnings.map((warning, idx) => (
+                      <div key={idx} className="flex items-start gap-2 text-sm sm:text-base">
+                        <span className="text-yellow-400 mt-0.5">•</span>
+                        <span className="text-primary flex-1">{warning}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {plan.seasonalInfo.suggestions.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="text-sm font-semibold text-primary">💡 Recommendations:</div>
+                    {plan.seasonalInfo.suggestions.map((suggestion, idx) => (
+                      <div key={idx} className="flex items-start gap-2 text-sm sm:text-base">
+                        <span className="text-blue-400 mt-0.5">→</span>
+                        <span className="text-secondary flex-1">{suggestion}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="glass-card p-4 sm:p-6">
+          <div className="text-base sm:text-lg font-semibold mb-2">Total Trip Cost: ₹{plan.totals.totalCostINR.toLocaleString('en-IN')}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 text-xs sm:text-sm">
             <div>Stay: ₹{plan.totals.breakdown.stay.toLocaleString('en-IN')}</div>
             <div>Food: ₹{plan.totals.breakdown.food.toLocaleString('en-IN')}</div>
             <div>Transport: ₹{plan.totals.breakdown.transport.toLocaleString('en-IN')}</div>
@@ -157,10 +213,10 @@ const YourPlanPage: React.FC = () => {
         <div className="space-y-4">
           {plan.days.map((d) => (
             <div key={d.day} className="glass-card overflow-hidden">
-              <button onClick={() => toggleDay(d.day)} className="w-full p-6 text-left flex items-center justify-between hover:bg-white/5 transition-colors">
+              <button onClick={() => toggleDay(d.day)} className="w-full p-4 sm:p-6 text-left flex items-center justify-between hover:bg-white/5 transition-colors touch-manipulation active-scale">
                 <div>
-                  <div className="text-xl font-bold text-primary">Day {d.day}: {d.header}</div>
-                  <div className="text-secondary mt-1">
+                  <div className="text-lg sm:text-xl font-bold text-primary">Day {d.day}: {d.header}</div>
+                  <div className="text-sm sm:text-base text-secondary mt-1">
                     {d.date && <span>{new Date(d.date).toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })} • </span>}
                     {(d.slots.morning?.length || 0) + (d.slots.afternoon?.length || 0) + (d.slots.evening?.length || 0)} activities • ₹{Number(d.totalDayCostINR || 0).toLocaleString('en-IN')}
                     {d.weather && <span> • {d.weather.temperature}°C {d.weather.condition}</span>}
@@ -174,7 +230,7 @@ const YourPlanPage: React.FC = () => {
                   <div>
                     <div className="font-semibold text-primary mb-3">🌤️ Weather & Recommendations</div>
                     {/* Use weather from plan if available, otherwise fall back to forecast */}
-                    {d.weather ? (
+                    {d.weather && d.weather.temperature ? (
                       (() => {
                         const suggestion = weatherSuggestions.get(d.day) || 
                           generateWeatherRecommendation({
@@ -200,14 +256,14 @@ const YourPlanPage: React.FC = () => {
                           />
                         );
                       })()
-                    ) : forecast && forecast.daily.length > 0 ? (
+                    ) : forecast && forecast.daily && forecast.daily.length > 0 ? (
                       (() => {
                         // Find matching weather data for this day
                         const forecastIndex = Math.min(d.day - 1, forecast.daily.length - 1);
-                        if (forecastIndex >= 0) {
+                        if (forecastIndex >= 0 && forecast.daily[forecastIndex]) {
                           const dayWeather = forecast.daily[forecastIndex];
                           const suggestion = weatherSuggestions.get(d.day) || 
-                            "Weather information is being updated. Check back soon for personalized recommendations!";
+                            generateWeatherRecommendation(dayWeather, d);
                           
                           return (
                             <WeatherCard 
@@ -221,16 +277,30 @@ const YourPlanPage: React.FC = () => {
                         }
                         return null;
                       })()
-                    ) : (
+                    ) : loading ? (
                       <div className="glass-card p-4 mt-3 mb-3">
                         <div className="flex items-center justify-between mb-2">
-                          <div className="text-lg font-semibold text-primary">Weather data loading...</div>
+                          <div className="text-lg font-semibold text-primary">🌤️ Weather data loading...</div>
                         </div>
                         <div className="mt-3 p-3 glass-card bg-white/5">
                           <div className="flex items-start">
-                            <div className="flex-shrink-0 mr-2">💬</div>
+                            <div className="flex-shrink-0 mr-2">⏳</div>
                             <div className="text-sm text-secondary">
-                              Weather information will be available soon. Check back for personalized recommendations!
+                              Fetching weather information for {destination}...
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="glass-card p-4 mt-3 mb-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-lg font-semibold text-primary">🌤️ Weather Information</div>
+                        </div>
+                        <div className="mt-3 p-3 glass-card bg-white/5">
+                          <div className="flex items-start">
+                            <div className="flex-shrink-0 mr-2">ℹ️</div>
+                            <div className="text-sm text-secondary">
+                              Weather data is currently unavailable. Plan your activities based on typical weather for {destination} during this season. Check local forecasts closer to your travel dates.
                             </div>
                           </div>
                         </div>

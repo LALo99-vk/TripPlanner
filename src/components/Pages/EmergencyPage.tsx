@@ -1,10 +1,25 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Phone, MapPin, Share, Clock, Shield, Zap, Users, Heart } from 'lucide-react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { AlertTriangle, Phone, MapPin, Share, Clock, Shield, Zap, Users, Heart, RefreshCw, XCircle, CheckCircle, Car } from 'lucide-react';
 import { EMERGENCY_NUMBERS } from '../../utils/constants';
 import { EmergencyContactsData } from '../../services/api';
 import { getAuthenticatedSupabaseClient } from '../../config/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { getMedicalProfile, MedicalProfile } from '../../services/medicalProfileRepository';
+import { sendSOSAlert, sendLocationUpdate } from '../../services/chatRepository';
+import { sendCompleteSOSAlert, sendLocationUpdateSMS } from '../../services/sosAlertService';
+import { 
+  createSOSSession, 
+  cancelSOSSession, 
+  getSOSSession,
+  getAcknowledgements,
+  getResponseTypeDisplay,
+  formatAckTime,
+  type Acknowledgement,
+  type SOSSession 
+} from '../../services/sosSessionService';
+
+// Location update interval (3 minutes in milliseconds)
+const LOCATION_UPDATE_INTERVAL = 3 * 60 * 1000;
 
 const EmergencyPage: React.FC = () => {
   const { user } = useAuth();
@@ -25,6 +40,19 @@ const EmergencyPage: React.FC = () => {
   const [groupsError, setGroupsError] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [medicalProfile, setMedicalProfile] = useState<MedicalProfile | null>(null);
+  
+  // SOS tracking states for automatic location updates
+  const [sosStartTime, setSosStartTime] = useState<Date | null>(null);
+  const [locationUpdateCount, setLocationUpdateCount] = useState(0);
+  const [nextUpdateIn, setNextUpdateIn] = useState<number>(0);
+  const locationUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // SOS session and acknowledgement tracking
+  const [sosSession, setSosSession] = useState<SOSSession | null>(null);
+  const [acknowledgements, setAcknowledgements] = useState<Acknowledgement[]>([]);
+  const ackPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(false);
 
   // Fetch user groups
   useEffect(() => {
@@ -143,27 +171,50 @@ const EmergencyPage: React.FC = () => {
         if (data) {
           // setFinalizedPlan(data); // Not needed currently
           setLatestPlanName(data.plan_name);
-          setCurrentDestination(data.destination);
+          const newDestination = data.destination;
           
           console.log('Finalized plan data:', data);
-          console.log('Destination from plan:', data.destination);
+          console.log('Destination from plan:', newDestination);
           console.log('Plan name:', data.plan_name);
           console.log('Group ID:', selectedGroupId);
           
-          // Fetch emergency contacts for the destination
-          if (data.destination && !isOffline) {
-            console.log('Fetching emergency contacts for destination:', data.destination);
-            await fetchEmergencyContacts(data.destination);
-          } else if (data.destination && isOffline) {
-            // Load from localStorage if offline
-            const cachedData = localStorage.getItem(`emergency_contacts_cached_${data.destination}`);
+          // Check if destination changed
+          const destinationChanged = currentDestination !== newDestination;
+          setCurrentDestination(newDestination);
+          
+          if (newDestination) {
+            // Try to load from cache first
+            const cachedData = localStorage.getItem(`emergency_contacts_cached_${newDestination}`);
+            const cachedTimestamp = localStorage.getItem(`emergency_contacts_timestamp_${newDestination}`);
+            
             if (cachedData) {
+              console.log('✅ Loading emergency contacts from cache for:', newDestination);
               setEmergencyData(JSON.parse(cachedData));
+              setEmergencyError(null);
+              
+              // Check if cache is older than 24 hours
+              const cacheAge = cachedTimestamp ? Date.now() - parseInt(cachedTimestamp) : Infinity;
+              const isCacheStale = cacheAge > 24 * 60 * 60 * 1000; // 24 hours
+              
+              // Only fetch if destination changed OR cache is stale AND we're online
+              if ((destinationChanged || isCacheStale) && !isOffline) {
+                console.log('🔄 Cache is stale or destination changed, refreshing in background...');
+                // Fetch in background to update cache, but don't block UI
+                fetchEmergencyContacts(newDestination, true);
+              }
+            } else if (!isOffline) {
+              // No cache available, fetch new data
+              console.log('📡 No cache found, fetching emergency contacts for:', newDestination);
+              await fetchEmergencyContacts(newDestination);
+            } else {
+              // Offline and no cache
+              setEmergencyError('Emergency contacts not available offline. Connect to internet to load.');
             }
           }
         } else {
           // setFinalizedPlan(null); // Not needed currently
           setLatestPlanName(null);
+          setCurrentDestination(null);
           setEmergencyError('No trip plan finalized yet.');
         }
       } catch (error) {
@@ -189,13 +240,16 @@ const EmergencyPage: React.FC = () => {
     };
   }, []);
   
-  const fetchEmergencyContacts = async (destination: string) => {
+  const fetchEmergencyContacts = async (destination: string, isBackgroundRefresh: boolean = false) => {
     if (!selectedGroupId) return;
     
-    console.log('fetchEmergencyContacts called with destination:', destination);
+    console.log('fetchEmergencyContacts called with destination:', destination, 'background:', isBackgroundRefresh);
     
-    setLoadingEmergency(true);
-    setEmergencyError(null);
+    // Only show loading state if it's not a background refresh
+    if (!isBackgroundRefresh) {
+      setLoadingEmergency(true);
+      setEmergencyError(null);
+    }
     
     try {
       // Check if OpenAI API key is available
@@ -265,23 +319,37 @@ Provide real, accurate emergency information for ${destination}, India. Include 
 
       setEmergencyData(emergencyData);
 
-      // Cache in localStorage by destination
+      // Cache in localStorage by destination with timestamp
       localStorage.setItem(`emergency_contacts_cached_${destination}`, JSON.stringify(emergencyData));
-      console.log(`Generated emergency contacts for ${destination}`);
+      localStorage.setItem(`emergency_contacts_timestamp_${destination}`, Date.now().toString());
+      
+      if (isBackgroundRefresh) {
+        console.log(`✅ Background refresh completed for ${destination}`);
+      } else {
+        console.log(`✅ Generated emergency contacts for ${destination}`);
+      }
     } catch (e) {
       console.error('Error generating emergency contacts:', e);
       const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-      setEmergencyError(`Unable to generate emergency contacts for ${destination}. ${errorMessage} Showing general numbers.`);
       
-      // Try to load from cache first
-      const cachedData = destination
-        ? localStorage.getItem(`emergency_contacts_cached_${destination}`)
-        : null;
-      if (cachedData) {
-        setEmergencyData(JSON.parse(cachedData));
+      // Only show error if it's not a background refresh
+      if (!isBackgroundRefresh) {
+        setEmergencyError(`Unable to generate emergency contacts for ${destination}. ${errorMessage} Showing general numbers.`);
+        
+        // Try to load from cache first
+        const cachedData = destination
+          ? localStorage.getItem(`emergency_contacts_cached_${destination}`)
+          : null;
+        if (cachedData) {
+          setEmergencyData(JSON.parse(cachedData));
+        }
+      } else {
+        console.log(`Background refresh failed, keeping cached data for ${destination}`);
       }
     } finally {
-      setLoadingEmergency(false);
+      if (!isBackgroundRefresh) {
+        setLoadingEmergency(false);
+      }
     }
   };
   
@@ -293,39 +361,432 @@ Provide real, accurate emergency information for ${destination}, India. Include 
   };
 
   
-  const activateSOS = () => {
+  // Function to send periodic location updates
+  // Function to trigger location update (called by interval and on restore)
+  const triggerLocationUpdate = useCallback(() => {
+    console.log('🔔 triggerLocationUpdate called!');
+    
+    // Get current values from localStorage since state might not be updated
+    const savedSession = localStorage.getItem('activeSosSession');
+    if (!savedSession) {
+      console.log('⚠️ No active session found in localStorage');
+      return;
+    }
+    
+    const sessionData = JSON.parse(savedSession);
+    const updateNumber = (sessionData.locationUpdateCount || 0) + 1;
+    
+    console.log(`📍 Triggering location update #${updateNumber}...`);
+    console.log('📋 Session data:', sessionData);
+    
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const currentLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        
+        setLocation(currentLocation);
+        const timestamp = new Date().toISOString();
+        setLocationUpdateCount(updateNumber);
+        
+        // Update localStorage with latest location, count, and time
+        sessionData.lastLocation = currentLocation;
+        sessionData.locationUpdateCount = updateNumber;
+        sessionData.lastUpdateTime = timestamp;
+        localStorage.setItem('activeSosSession', JSON.stringify(sessionData));
+        
+        try {
+          // Send location update to group chat
+          if (selectedGroupId && user) {
+            await sendLocationUpdate(
+              selectedGroupId,
+              user.uid,
+              user.displayName || user.email || 'Unknown User',
+              {
+                location: currentLocation,
+                timestamp: timestamp,
+                updateNumber: updateNumber,
+              }
+            );
+            console.log(`✅ Location update #${updateNumber} sent to group`);
+          }
+          
+          // Send SMS location update to emergency contact
+          const contacts = sessionData.emergencyContacts || [];
+          if (contacts.length > 0) {
+            await sendLocationUpdateSMS({
+              userName: user?.displayName || user?.email || 'User',
+              location: currentLocation,
+              timestamp: timestamp,
+              updateNumber: updateNumber,
+              emergencyContacts: contacts,
+            });
+            console.log(`✅ SMS location update #${updateNumber} sent`);
+          }
+        } catch (error) {
+          console.error('Error sending location update:', error);
+        }
+      },
+      (error) => {
+        console.error('Location update error:', error);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [user, selectedGroupId]);
+
+  // Legacy function for backward compatibility
+  const sendPeriodicLocationUpdate = useCallback(() => {
+    triggerLocationUpdate();
+  }, [triggerLocationUpdate]);
+
+  // Cancel SOS and stop location updates
+  const cancelSOS = useCallback(async () => {
+    // Clear intervals
+    if (locationUpdateIntervalRef.current) {
+      clearInterval(locationUpdateIntervalRef.current);
+      locationUpdateIntervalRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    if (ackPollingIntervalRef.current) {
+      clearInterval(ackPollingIntervalRef.current);
+      ackPollingIntervalRef.current = null;
+    }
+    
+    // Cancel session on backend
+    if (sosSession?.id) {
+      await cancelSOSSession(sosSession.id);
+    }
+    
+    // Clear localStorage
+    localStorage.removeItem('activeSosSession');
+    console.log('🗑️ SOS session cleared from localStorage');
+    
+    // Reset states
+    setSosActivated(false);
+    setSosStartTime(null);
+    setLocationUpdateCount(0);
+    setNextUpdateIn(0);
+    setSosSession(null);
+    setAcknowledgements([]);
+    
+    console.log('🛑 SOS cancelled, location updates stopped');
+    alert('✅ SOS Cancelled\n\nLocation updates have been stopped.');
+  }, [sosSession]);
+
+  // Cleanup intervals on unmount
+  useEffect(() => {
+    return () => {
+      if (locationUpdateIntervalRef.current) {
+        clearInterval(locationUpdateIntervalRef.current);
+      }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+      if (ackPollingIntervalRef.current) {
+        clearInterval(ackPollingIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Restore SOS session from localStorage on mount
+  useEffect(() => {
+    const restoreSOSSession = async () => {
+      const savedSession = localStorage.getItem('activeSosSession');
+      if (!savedSession) return;
+
+      try {
+        setIsRestoringSession(true);
+        const sessionData = JSON.parse(savedSession);
+        
+        // Check if session is still active (not older than 1 hour)
+        const sessionAge = Date.now() - new Date(sessionData.startedAt).getTime();
+        const ONE_HOUR = 60 * 60 * 1000;
+        
+        if (sessionAge > ONE_HOUR) {
+          // Session expired, clear it
+          localStorage.removeItem('activeSosSession');
+          console.log('🕐 SOS session expired, cleared');
+          return;
+        }
+
+        // Verify session is still active on server
+        const serverSession = await getSOSSession(sessionData.id);
+        if (!serverSession || serverSession.status !== 'active') {
+          localStorage.removeItem('activeSosSession');
+          console.log('🛑 SOS session no longer active on server');
+          return;
+        }
+
+        console.log('🔄 Restoring SOS session:', sessionData.id);
+        
+        // Restore states
+        setSosActivated(true);
+        setSosSession(serverSession);
+        setSosStartTime(new Date(sessionData.startedAt));
+        setLocationUpdateCount(sessionData.locationUpdateCount || 0);
+        
+        // Restore location if available
+        if (sessionData.lastLocation) {
+          setLocation(sessionData.lastLocation);
+        }
+
+        // Restore acknowledgements
+        const acks = await getAcknowledgements(sessionData.id);
+        setAcknowledgements(acks);
+
+        // Clear any existing intervals first
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+        if (locationUpdateIntervalRef.current) {
+          clearInterval(locationUpdateIntervalRef.current);
+          locationUpdateIntervalRef.current = null;
+        }
+        
+        // Calculate remaining time until next update
+        const lastUpdateTime = sessionData.lastUpdateTime ? new Date(sessionData.lastUpdateTime).getTime() : new Date(sessionData.startedAt).getTime();
+        const timeSinceLastUpdate = Date.now() - lastUpdateTime;
+        const remainingTime = Math.max(0, LOCATION_UPDATE_INTERVAL - timeSinceLastUpdate);
+        let countdown = Math.ceil(remainingTime / 1000);
+        
+        // If time has passed, set to full interval
+        if (countdown <= 0) {
+          countdown = LOCATION_UPDATE_INTERVAL / 1000;
+        }
+        
+        setNextUpdateIn(countdown);
+        console.log(`🔄 Restored timer: ${countdown} seconds until next update`);
+        
+        // Restart countdown timer
+        countdownIntervalRef.current = setInterval(() => {
+          countdown = countdown - 1;
+          if (countdown <= 0) {
+            countdown = LOCATION_UPDATE_INTERVAL / 1000;
+            // Trigger location update when countdown reaches 0
+            triggerLocationUpdate();
+          }
+          setNextUpdateIn(countdown);
+        }, 1000);
+
+        // Restart acknowledgement polling
+        startAcknowledgementPolling(sessionData.id);
+
+        console.log('✅ SOS session restored successfully');
+      } catch (error) {
+        console.error('Error restoring SOS session:', error);
+        localStorage.removeItem('activeSosSession');
+      } finally {
+        setIsRestoringSession(false);
+      }
+    };
+
+    restoreSOSSession();
+  }, []); // Run only on mount
+
+  // Poll for acknowledgements when SOS is active
+  const startAcknowledgementPolling = useCallback((sessionId: string) => {
+    // Clear existing interval if any
+    if (ackPollingIntervalRef.current) {
+      clearInterval(ackPollingIntervalRef.current);
+    }
+    
+    // Poll every 10 seconds for acknowledgements
+    ackPollingIntervalRef.current = setInterval(async () => {
+      try {
+        const acks = await getAcknowledgements(sessionId);
+        setAcknowledgements(prevAcks => {
+          if (acks.length > prevAcks.length) {
+            // Play notification sound for new acknowledgements
+            const latestAck = acks[acks.length - 1];
+            const { text } = getResponseTypeDisplay(latestAck.responseType);
+            console.log(`🔔 New acknowledgement: ${latestAck.contactName} - ${text}`);
+          }
+          return acks;
+        });
+      } catch (error) {
+        console.error('Error polling acknowledgements:', error);
+      }
+    }, 10000);
+    
+    // Also fetch immediately
+    getAcknowledgements(sessionId).then(acks => {
+      setAcknowledgements(acks);
+    }).catch(console.error);
+  }, []);
+
+  const activateSOS = async () => {
     if (sosActivated) return;
     
-    setSosActivated(true);
+    if (!user) {
+      alert('Please sign in to use SOS feature');
+      return;
+    }
+
+    if (!selectedGroupId) {
+      alert('Please select a group to send SOS alert');
+      return;
+    }
     
-    // Get current location
+    setSosActivated(true);
+    setSosStartTime(new Date());
+    setLocationUpdateCount(0);
+    setNextUpdateIn(LOCATION_UPDATE_INTERVAL / 1000);
+    
+    // Step 1: Get current GPS location
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setLocation({
+        async (position) => {
+          const currentLocation = {
             lat: position.coords.latitude,
             lng: position.coords.longitude
-          });
+          };
+          
+          setLocation(currentLocation);
           setLocationError(null);
+          
+          const timestamp = new Date().toISOString();
+          
+          try {
+            // Step 2: Send SOS alert to group chat (WebApp)
+            console.log('📱 Sending SOS alert to group chat...');
+            await sendSOSAlert(
+              selectedGroupId,
+              user.uid,
+              user.displayName || user.email || 'Unknown User',
+              {
+                location: currentLocation,
+                timestamp: timestamp,
+              }
+            );
+            console.log('✅ SOS alert sent to group chat');
+            
+            // Step 3: Send SMS to emergency contacts and create session
+            const emergencyContacts = medicalProfile?.emergencyContactPhone && medicalProfile?.emergencyContactName
+              ? [{
+                  name: medicalProfile.emergencyContactName,
+                  phone: medicalProfile.emergencyContactPhone,
+                }]
+              : [];
+
+            if (emergencyContacts.length > 0) {
+              console.log('📞 Sending emergency SMS...');
+              
+              await sendCompleteSOSAlert({
+                userName: user.displayName || user.email || 'Unknown User',
+                location: currentLocation,
+                timestamp: timestamp,
+                emergencyContacts: emergencyContacts,
+              });
+              
+              console.log('✅ Emergency SMS sent');
+            }
+            
+            // Step 4: Create SOS session for acknowledgement tracking
+            try {
+              console.log('📝 Creating SOS session for acknowledgement tracking...');
+              const session = await createSOSSession(
+                user.uid,
+                user.displayName || user.email || 'Unknown User',
+                selectedGroupId,
+                currentLocation,
+                emergencyContacts
+              );
+              setSosSession(session);
+              setAcknowledgements([]);
+              
+              // Save session to localStorage for persistence across page refresh
+              const sessionToStore = {
+                id: session.id,
+                startedAt: new Date().toISOString(),
+                lastLocation: currentLocation,
+                locationUpdateCount: 0,
+                lastUpdateTime: new Date().toISOString(),
+                emergencyContacts: emergencyContacts,
+              };
+              localStorage.setItem('activeSosSession', JSON.stringify(sessionToStore));
+              console.log('💾 SOS session saved to localStorage');
+              
+              // Start polling for acknowledgements
+              startAcknowledgementPolling(session.id);
+              console.log('✅ SOS session created:', session.id);
+            } catch (sessionError) {
+              console.error('Failed to create SOS session (non-critical):', sessionError);
+            }
+
+            if (emergencyContacts.length > 0) {
+              alert('🆘 SOS Alert Sent!\n\n✅ Group members notified\n✅ Emergency SMS sent to ' + medicalProfile?.emergencyContactName + '\n\n📍 Location updates every 3 minutes\n💬 Waiting for acknowledgements...\n🛑 Press "Cancel SOS" to stop');
+            } else {
+              console.warn('No emergency contact configured');
+              alert('🆘 SOS Alert Sent to Group!\n\n⚠️ No emergency contact configured.\n\n📍 Location updates every 3 minutes to group.\n🛑 Press "Cancel SOS" to stop');
+            }
+            
+            // Clear any existing intervals first (important for React StrictMode)
+            if (locationUpdateIntervalRef.current) {
+              clearInterval(locationUpdateIntervalRef.current);
+              locationUpdateIntervalRef.current = null;
+            }
+            if (countdownIntervalRef.current) {
+              clearInterval(countdownIntervalRef.current);
+              countdownIntervalRef.current = null;
+            }
+            
+            // Step 5: Start countdown timer that triggers location updates
+            console.log('⏰ Starting automatic location updates every 3 minutes...');
+            let countdown = LOCATION_UPDATE_INTERVAL / 1000;
+            setNextUpdateIn(countdown);
+            
+            // Single interval that handles both countdown AND triggers updates
+            countdownIntervalRef.current = setInterval(() => {
+              countdown = countdown - 1;
+              if (countdown <= 0) {
+                // Time to send update!
+                console.log('📍 Countdown reached 0, sending location update...');
+                triggerLocationUpdate();
+                countdown = LOCATION_UPDATE_INTERVAL / 1000;
+              }
+              setNextUpdateIn(countdown);
+            }, 1000);
+            
+          } catch (error) {
+            console.error('Error sending SOS alert:', error);
+            alert('Failed to send SOS alert. Please call emergency services directly.');
+          }
         },
-        () => {
+        (error) => {
+          console.error('Geolocation error:', error);
           setLocationError('Unable to get your location. Please enable location services.');
+          
+          // Still try to send alert without exact location
+          if (selectedGroupId && user) {
+            const timestamp = new Date().toISOString();
+            sendSOSAlert(
+              selectedGroupId,
+              user.uid,
+              user.displayName || user.email || 'Unknown User',
+              {
+                location: { lat: 0, lng: 0 }, // No location available
+                timestamp: timestamp,
+              }
+            ).catch(err => console.error('Failed to send SOS without location:', err));
+            
+            alert('⚠️ SOS sent without location. Enable GPS for better emergency response.');
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
         }
       );
     } else {
       setLocationError('Geolocation is not supported by this browser.');
+      alert('Geolocation not supported. Please call emergency services directly.');
     }
-
-    // In a real app, this would:
-    // 1. Send location to emergency services
-    // 2. Notify emergency contacts
-    // 3. Alert travel group members
-    // 4. Start recording audio/video if needed
-
-    // Auto-deactivate after 30 seconds for demo
-    setTimeout(() => {
-      setSosActivated(false);
-    }, 30000);
   };
 
   const shareLocation = () => {
@@ -358,7 +819,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
         {/* Group Selector */}
         {groups.length > 0 && (
           <div className="mb-8">
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <Users className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-semibold text-primary">Select Group Trip</h3>
@@ -411,7 +872,17 @@ Provide real, accurate emergency information for ${destination}, India. Include 
             <div className="glass-card p-8 text-center">
               <h2 className="text-2xl font-bold text-primary mb-6">Emergency SOS</h2>
               
-              {sosActivated ? (
+              {isRestoringSession ? (
+                <div className="space-y-4">
+                  <div className="w-32 h-32 bg-yellow-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
+                    <RefreshCw className="h-16 w-16 text-white animate-spin" />
+                  </div>
+                  <div className="text-yellow-500 font-bold text-lg">Restoring Session...</div>
+                  <div className="text-sm text-secondary">
+                    Checking for active SOS alert
+                  </div>
+                </div>
+              ) : sosActivated ? (
                 <div className="space-y-4">
                   <div className="w-32 h-32 bg-red-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
                     <AlertTriangle className="h-16 w-16 text-white" />
@@ -420,6 +891,22 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                   <div className="text-sm text-secondary">
                     Emergency services and contacts have been notified
                   </div>
+                  
+                  {/* Auto Location Update Status */}
+                  <div className="glass-card border border-orange-500/30 bg-orange-500/10 p-4 rounded-xl">
+                    <div className="flex items-center justify-center text-orange-400 mb-2">
+                      <Clock className="h-4 w-4 mr-2" />
+                      <span className="font-semibold">Auto Location Updates Active</span>
+                    </div>
+                    <div className="text-xs text-orange-300 space-y-1">
+                      {sosStartTime && (
+                        <div>Started: {sosStartTime.toLocaleTimeString()}</div>
+                      )}
+                      <div>Updates sent: {locationUpdateCount}</div>
+                      <div>Next update in: {Math.floor(nextUpdateIn / 60)}:{(nextUpdateIn % 60).toString().padStart(2, '0')}</div>
+                    </div>
+                  </div>
+                  
                   {location && (
                     <div className="glass-card border border-red-500/30 p-4">
                       <div className="flex items-center justify-center text-sm text-red-400 mb-2">
@@ -431,6 +918,74 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                       </div>
                     </div>
                   )}
+                  
+                  {/* Contact Acknowledgements */}
+                  <div className="glass-card border border-blue-500/30 bg-blue-500/5 p-4 rounded-xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center text-blue-400">
+                        <Users className="h-4 w-4 mr-2" />
+                        <span className="font-semibold text-sm">Contact Responses</span>
+                      </div>
+                      {medicalProfile?.emergencyContactName && (
+                        <span className="text-xs text-secondary">
+                          Waiting for: {medicalProfile.emergencyContactName}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {acknowledgements.length > 0 ? (
+                      <div className="space-y-2">
+                        {acknowledgements.map((ack) => {
+                          const { text, emoji, color } = getResponseTypeDisplay(ack.responseType);
+                          return (
+                            <div 
+                              key={ack.id}
+                              className="flex items-center justify-between p-3 glass-card rounded-lg border border-green-500/30 bg-green-500/10"
+                            >
+                              <div className="flex items-center">
+                                <span className="text-xl mr-2">{emoji}</span>
+                                <div>
+                                  <div className={`font-semibold ${color}`}>
+                                    {ack.contactName}
+                                  </div>
+                                  <div className="text-xs text-secondary">
+                                    {text}
+                                    {ack.responseMessage && ack.responseType === 'other' && (
+                                      <span className="ml-1">: "{ack.responseMessage}"</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-xs text-secondary">
+                                {formatAckTime(ack.acknowledgedAt)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-center py-3">
+                        <div className="text-xs text-secondary animate-pulse">
+                          📱 Waiting for responses...
+                        </div>
+                        <div className="text-xs text-muted mt-1">
+                          Contact can reply: SAFE, ON MY WAY, OK
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Cancel SOS Button */}
+                  <button
+                    onClick={cancelSOS}
+                    className="mt-4 w-full flex items-center justify-center p-4 bg-gray-700 hover:bg-gray-600 text-white rounded-xl transition-all duration-300"
+                  >
+                    <XCircle className="h-5 w-5 mr-2" />
+                    <span className="font-semibold">Cancel SOS</span>
+                  </button>
+                  <div className="text-xs text-secondary mt-2">
+                    Press to stop location updates
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -457,7 +1012,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
             </div>
 
             {/* Quick Actions */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h3 className="text-xl font-bold text-primary mb-4">Quick Actions</h3>
               
               <div className="space-y-3">
@@ -494,124 +1049,77 @@ Provide real, accurate emergency information for ${destination}, India. Include 
               </div>
             </div>
 
-            {/* AI Emergency Contacts */}
-            <div className="glass-card p-6">
-              <h3 className="text-xl font-bold text-primary mb-4">
-                Emergency Contacts {latestPlanName ? `for ${latestPlanName}` : 'for Your Trip'}
-                {currentDestination && <span className="text-sm text-secondary block">Destination: {currentDestination}</span>}
-              </h3>
-              {loadingEmergency && (
-                <div className="text-secondary text-sm">Fetching emergency contacts...</div>
-              )}
-              {emergencyError && (
-                <div className="text-sm text-red-400 mb-4">{emergencyError}</div>
-              )}
-              {emergencyData && emergencyData.general && (
-                <div className="space-y-4 text-sm mb-6">
-                  <div>
-                    <div className="font-semibold text-primary mb-2">General</div>
-                    <div className="space-y-1">
-                      {Object.entries(emergencyData.general).map(([key, value]) => (
-                        <div key={key} className="flex justify-between">
-                          <span className="text-secondary capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
-                          <span className="text-primary font-medium">
-                            {typeof value === 'object' && value !== null ? 
-                              (value as any).number || JSON.stringify(value) : 
-                              value
-                            }
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+            {/* Consolidated Emergency Contacts */}
+            <div className="glass-card p-4 sm:p-6">
+              <div className="mb-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="text-2xl font-bold text-primary mb-2">
+                      Emergency Contacts
+                    </h3>
+                    {currentDestination && (
+                      <p className="text-sm text-secondary">
+                        📍 {currentDestination}
+                        {latestPlanName && <span className="ml-2">• {latestPlanName}</span>}
+                      </p>
+                    )}
                   </div>
-                  
-                  {emergencyData.local?.nearestHospitals && emergencyData.local.nearestHospitals.length > 0 && (
-                    <div>
-                      <div className="font-semibold text-primary mb-2">Nearby Hospitals</div>
-                      <div className="space-y-1">
-                        {emergencyData.local.nearestHospitals.map((hospital, idx) => (
-                          <div key={idx} className="text-secondary">
-                            <span className="text-primary">{hospital.name}</span>
-                            {hospital.address && <span className="text-xs block ml-4">{hospital.address}</span>}
-                            {hospital.phone && <span className="text-xs block ml-4">📞 {hospital.phone}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                  {currentDestination && !isOffline && (
+                    <button
+                      onClick={() => fetchEmergencyContacts(currentDestination, false)}
+                      disabled={loadingEmergency}
+                      className="flex items-center gap-2 px-3 py-2 glass-card hover:bg-white/10 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Refresh emergency contacts"
+                    >
+                      <RefreshCw className={`h-4 w-4 text-primary ${loadingEmergency ? 'animate-spin' : ''}`} />
+                      <span className="text-sm text-primary">Refresh</span>
+                    </button>
                   )}
-                  
-                  {emergencyData.local?.nearestPoliceStations && emergencyData.local.nearestPoliceStations.length > 0 && (
-                    <div>
-                      <div className="font-semibold text-primary mb-2">Nearby Police Stations</div>
-                      <div className="space-y-1">
-                        {emergencyData.local.nearestPoliceStations.map((station, idx) => (
-                          <div key={idx} className="text-secondary">
-                            <span className="text-primary">{station.name}</span>
-                            {station.address && <span className="text-xs block ml-4">{station.address}</span>}
-                            {station.phone && <span className="text-xs block ml-4">📞 {station.phone}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {emergencyData.tips?.length > 0 && (
-                    <div>
-                      <div className="font-semibold text-primary mb-2">Tips</div>
-                      <ul className="list-disc list-inside text-secondary space-y-1">
-                        {emergencyData.tips.map((t, i) => (<li key={i}>{t}</li>))}
-                      </ul>
-                    </div>
-                  )}
+                </div>
+              </div>
+
+              {loadingEmergency && (
+                <div className="text-secondary text-sm mb-4 flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Fetching emergency contacts...
                 </div>
               )}
               
-              {/* Always show basic emergency numbers */}
-              <div className="border-t border-white/20 pt-4">
-                <div className="font-semibold text-primary mb-2">General Emergency Numbers (India)</div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  {EMERGENCY_NUMBERS.map((service, index) => (
-                    <div key={index} className="flex justify-between">
-                      <span className="text-secondary">{service.icon} {service.name}:</span>
-                      <a
-                        href={`tel:${service.number}`}
-                        className="text-primary font-medium hover:underline"
-                      >
-                        {service.number}
-                      </a>
-                    </div>
-                  ))}
+              {/* Cache info */}
+              {emergencyData && currentDestination && !loadingEmergency && (
+                <div className="text-xs text-secondary mb-4 flex items-center gap-2">
+                  <span className="inline-block w-2 h-2 rounded-full bg-green-400"></span>
+                  <span>
+                    {(() => {
+                      const timestamp = localStorage.getItem(`emergency_contacts_timestamp_${currentDestination}`);
+                      if (timestamp) {
+                        const age = Date.now() - parseInt(timestamp);
+                        const hours = Math.floor(age / (1000 * 60 * 60));
+                        const minutes = Math.floor((age % (1000 * 60 * 60)) / (1000 * 60));
+                        
+                        if (hours > 0) {
+                          return `Last updated ${hours} hour${hours > 1 ? 's' : ''} ago`;
+                        } else if (minutes > 0) {
+                          return `Last updated ${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+                        } else {
+                          return 'Just updated';
+                        }
+                      }
+                      return 'Emergency contacts loaded';
+                    })()}
+                  </span>
                 </div>
-              </div>
-            </div>
-
-            {/* Safety Tips */}
-            <div className="glass-card p-6">
-              <h3 className="text-lg font-bold text-primary mb-4 flex items-center">
-                <Shield className="h-5 w-5 mr-2 text-green-400" />
-                Safety Tips
-              </h3>
-              <div className="space-y-2 text-sm text-secondary">
-                <p>• Always inform someone about your travel plans</p>
-                <p>• Keep emergency contacts easily accessible</p>
-                <p>• Download offline maps for your destination</p>
-                <p>• Carry copies of important documents</p>
-                <p>• Trust your instincts and stay alert</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Emergency Numbers (AI / destination-specific) */}
-          <div className="space-y-6">
-            <div className="glass-card p-6">
-              <h3 className="text-xl font-bold text-primary mb-1">Emergency Numbers</h3>
-              {currentDestination && (
-                <p className="text-xs text-secondary mb-4">
-                  Destination-specific numbers for {currentDestination}.
-                </p>
+              )}
+              
+              {emergencyError && !emergencyData && (
+                <div className="text-sm text-yellow-400 mb-4 p-3 glass-card border border-yellow-500/30">
+                  ℹ️ {emergencyError}
+                </div>
               )}
 
-              <div className="space-y-3">
+              {/* Main Emergency Numbers */}
+              <div className="space-y-3 mb-6">
+                <h4 className="text-lg font-semibold text-primary mb-3">🚨 Emergency Hotlines</h4>
                 {emergencyData?.general ? (
                   Object.entries(emergencyData.general).map(([key, value]) => {
                     const label = key
@@ -626,17 +1134,17 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                     return (
                       <div
                         key={key}
-                        className="flex items-center justify-between p-4 glass-card hover:bg-white/10 transition-all duration-300"
+                        className="flex items-center justify-between p-4 glass-card hover:bg-white/10 transition-all duration-300 rounded-xl"
                       >
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-primary">{label}</span>
+                        <div className="flex flex-col flex-1">
+                          <span className="font-semibold text-primary text-base">{label}</span>
                           {note && (
                             <span className="text-xs text-secondary mt-1">{note}</span>
                           )}
                         </div>
                         <a
                           href={`tel:${number}`}
-                          className="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-2 rounded-xl font-semibold hover:shadow-lg transition-all duration-300 flex items-center"
+                          className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-300 flex items-center ml-4"
                         >
                           <Phone className="h-4 w-4 mr-2" />
                           {formatPhoneNumber(number)}
@@ -645,16 +1153,127 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                     );
                   })
                 ) : (
-                  <div className="text-sm text-secondary">
-                    Destination-specific emergency numbers will appear here once a finalized plan is loaded
-                    and emergency contacts are generated.
-                  </div>
+                  <>
+                    {EMERGENCY_NUMBERS.map((service, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between p-4 glass-card hover:bg-white/10 transition-all duration-300 rounded-xl"
+                      >
+                        <div className="flex items-center flex-1">
+                          <span className="text-2xl mr-3">{service.icon}</span>
+                          <span className="font-semibold text-primary text-base">{service.name}</span>
+                        </div>
+                        <a
+                          href={`tel:${service.number}`}
+                          className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-300 flex items-center ml-4"
+                        >
+                          <Phone className="h-4 w-4 mr-2" />
+                          {service.number}
+                        </a>
+                      </div>
+                    ))}
+                  </>
                 )}
               </div>
+              
+              {/* Nearby Hospitals */}
+              {emergencyData?.local?.nearestHospitals && emergencyData.local.nearestHospitals.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="text-lg font-semibold text-primary mb-3 flex items-center">
+                    <Heart className="h-5 w-5 mr-2 text-red-400" />
+                    Nearby Hospitals
+                  </h4>
+                  <div className="space-y-3">
+                    {emergencyData.local.nearestHospitals.map((hospital, idx) => (
+                      <div key={idx} className="p-4 glass-card rounded-xl hover:bg-white/10 transition-all">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="font-semibold text-primary text-base">{hospital.name}</div>
+                            {hospital.address && (
+                              <div className="text-xs text-secondary mt-1 flex items-start">
+                                <MapPin className="h-3 w-3 mr-1 mt-0.5 flex-shrink-0" />
+                                {hospital.address}
+                              </div>
+                            )}
+                            {hospital.open24x7 && (
+                              <span className="inline-block mt-2 px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded">
+                                24/7 Open
+                              </span>
+                            )}
+                          </div>
+                          {hospital.phone && (
+                            <a
+                              href={`tel:${hospital.phone}`}
+                              className="ml-4 bg-blue-500 hover:bg-blue-600 text-white p-3 rounded-xl transition-all duration-300 flex items-center"
+                            >
+                              <Phone className="h-4 w-4" />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Nearby Police Stations */}
+              {emergencyData?.local?.nearestPoliceStations && emergencyData.local.nearestPoliceStations.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="text-lg font-semibold text-primary mb-3 flex items-center">
+                    <Shield className="h-5 w-5 mr-2 text-blue-400" />
+                    Nearby Police Stations
+                  </h4>
+                  <div className="space-y-3">
+                    {emergencyData.local.nearestPoliceStations.map((station, idx) => (
+                      <div key={idx} className="p-4 glass-card rounded-xl hover:bg-white/10 transition-all">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="font-semibold text-primary text-base">{station.name}</div>
+                            {station.address && (
+                              <div className="text-xs text-secondary mt-1 flex items-start">
+                                <MapPin className="h-3 w-3 mr-1 mt-0.5 flex-shrink-0" />
+                                {station.address}
+                              </div>
+                            )}
+                          </div>
+                          {station.phone && (
+                            <a
+                              href={`tel:${station.phone}`}
+                              className="ml-4 bg-blue-500 hover:bg-blue-600 text-white p-3 rounded-xl transition-all duration-300 flex items-center"
+                            >
+                              <Phone className="h-4 w-4" />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Safety Tips */}
+              {emergencyData?.tips && emergencyData.tips.length > 0 && (
+                <div className="border-t border-white/20 pt-4">
+                  <h4 className="text-lg font-semibold text-primary mb-3">💡 Safety Tips</h4>
+                  <ul className="space-y-2 text-sm text-secondary">
+                    {emergencyData.tips.map((tip, i) => (
+                      <li key={i} className="flex items-start">
+                        <span className="text-green-400 mr-2">✓</span>
+                        <span>{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-6">
+
             {/* Medical Info */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h3 className="text-xl font-bold text-primary mb-2 flex items-center">
                 <Heart className="h-5 w-5 mr-2 text-red-400" />
                 Your Medical Information
@@ -720,7 +1339,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
             </div>
 
             {/* Recent Activity */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h3 className="text-xl font-bold text-primary mb-4 flex items-center">
                 <Clock className="h-5 w-5 mr-2 text-blue-400" />
                 Recent Activity

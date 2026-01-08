@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Trash2, Edit, Mic, Play, Pause } from 'lucide-react';
+import { Trash2, Edit, Mic, Play, Pause, AlertTriangle, MapPin, Phone } from 'lucide-react';
 import { ChatMessage } from '../../services/chatRepository';
 
 interface MessageItemProps {
@@ -96,11 +96,79 @@ const MessageItem: React.FC<MessageItemProps> = ({
 
         {/* Message Body */}
         <div
-          className={`glass-card p-3 max-w-[70%] ${
-            isOwnMessage ? 'bg-orange-500/20' : ''
+          className={`glass-card p-3 ${
+            message.messageType === 'sos' 
+              ? 'max-w-full border-2 border-red-500 bg-red-500/20 animate-pulse' 
+              : `max-w-[70%] ${isOwnMessage ? 'bg-orange-500/20' : ''}`
           }`}
         >
-          {message.messageType === 'text' ? (
+          {message.messageType === 'sos' ? (
+            // SOS Message - Special Emergency Display
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center animate-pulse">
+                  <AlertTriangle className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-red-400">🆘 EMERGENCY ALERT 🆘</div>
+                  <div className="text-sm text-primary">{message.senderName} needs help!</div>
+                </div>
+              </div>
+              
+              {message.sosLocation && message.sosLocation.lat !== 0 && message.sosLocation.lng !== 0 && (
+                <div className="glass-card p-3 bg-black/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <MapPin className="h-5 w-5 text-red-400" />
+                    <span className="text-sm font-semibold text-primary">Location:</span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-xs text-secondary font-mono">
+                      {message.sosLocation.lat.toFixed(6)}, {message.sosLocation.lng.toFixed(6)}
+                    </div>
+                    <a
+                      href={`https://www.google.com/maps?q=${message.sosLocation.lat},${message.sosLocation.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-all text-sm font-semibold"
+                    >
+                      <MapPin className="h-4 w-4" />
+                      View on Google Maps
+                    </a>
+                  </div>
+                </div>
+              )}
+              
+              <div className="text-xs text-secondary">
+                ⏰ {new Date(message.sosTimestamp || message.createdAt).toLocaleString()}
+              </div>
+              
+              <div className="flex flex-wrap gap-2">
+                {message.sosLocation && message.sosLocation.lat !== 0 && (
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(
+                      `🆘 Emergency! ${message.senderName} needs help!\nLocation: https://www.google.com/maps?q=${message.sosLocation.lat},${message.sosLocation.lng}`
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-lg transition-all text-xs font-semibold"
+                  >
+                    Share via WhatsApp
+                  </a>
+                )}
+                <button
+                  onClick={() => window.location.href = 'tel:100'}
+                  className="inline-flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg transition-all text-xs font-semibold"
+                >
+                  <Phone className="h-4 w-4" />
+                  Call Emergency (100)
+                </button>
+              </div>
+              
+              <div className="text-xs text-yellow-400 font-semibold">
+                ⚠️ If you can help, respond immediately or contact emergency services!
+              </div>
+            </div>
+          ) : message.messageType === 'text' ? (
             isEditing ? (
               <div className="space-y-2">
                 <input

@@ -28,18 +28,18 @@ const MyPlansPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe">
       <div className="content-container">
-        <div className="mb-6">
-          <div className="text-3xl font-bold text-primary">My Plans</div>
-          <div className="text-secondary">Past trips: {plans.length}</div>
+        <div className="mb-4 sm:mb-6">
+          <div className="text-2xl sm:text-3xl font-bold text-primary">My Plans</div>
+          <div className="text-sm sm:text-base text-secondary">Past trips: {plans.length}</div>
         </div>
         {loading ? (
           <div className="text-secondary">Loading...</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {plans.map((p) => (
-              <button key={p.id} onClick={() => openPlan(p)} className="glass-card p-4 text-left hover:bg-white/10 transition-colors">
+              <button key={p.id} onClick={() => openPlan(p)} className="glass-card p-4 text-left hover:bg-white/10 transition-colors touch-manipulation touch-target active-scale">
                 <div className="text-lg font-semibold text-primary">{p.name}</div>
                 <div className="text-sm text-secondary">
                   {p.createdAt instanceof Date 

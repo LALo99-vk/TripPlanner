@@ -93,7 +93,7 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
         <div className="max-w-4xl mx-auto">
           <button
             onClick={onBack}
-            className="premium-button-secondary flex items-center gap-2 mb-6"
+            className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 mb-6"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Groups
@@ -115,7 +115,7 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
         <div className="max-w-4xl mx-auto">
           <button
             onClick={onBack}
-            className="premium-button-secondary flex items-center gap-2 mb-6"
+            className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 mb-6"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Groups
@@ -142,7 +142,7 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
         {/* Back Button */}
         <button
           onClick={onBack}
-          className="premium-button-secondary flex items-center gap-2 mb-6"
+          className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 mb-6"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Groups
@@ -191,7 +191,7 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
             {isLeader && (
               <button
                 onClick={() => setShowInviteModal(true)}
-                className="premium-button-secondary flex items-center gap-2 text-sm"
+                className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 text-sm"
               >
                 <UserPlus className="h-4 w-4" />
                 Invite Member
@@ -316,7 +316,7 @@ const GroupDetailPage: React.FC<GroupDetailPageProps> = ({ groupId, onBack }) =>
                 />
                 <button
                   onClick={copyInviteLink}
-                  className="premium-button-secondary flex items-center gap-2 text-sm"
+                  className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 text-sm"
                 >
                   {copiedInviteLink ? (
                     <>

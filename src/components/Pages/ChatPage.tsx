@@ -90,21 +90,21 @@ const ChatPage: React.FC = () => {
   ];
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe">
       <div className="content-container">
         {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-primary mb-4 flex items-center justify-center">
-            <Bot className="h-10 w-10 mr-3 text-primary" />
+        <div className="text-center mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-4xl font-bold text-primary mb-3 sm:mb-4 flex items-center justify-center">
+            <Bot className="h-8 w-8 sm:h-10 sm:w-10 mr-2 sm:mr-3 text-primary" />
             🤖 AI Travel Assistant
           </h1>
-          <p className="text-xl text-secondary mb-2">
+          <p className="text-base sm:text-xl text-secondary mb-2">
             Your intelligent travel companion for exploring India
           </p>
         </div>
 
         {/* Quick Actions */}
-        <div className="mb-6">
+        <div className="mb-4 sm:mb-6">
           <h3 className="text-sm font-medium text-secondary mb-3">Quick Actions</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {quickActions.map((action, index) => {
@@ -113,10 +113,10 @@ const ChatPage: React.FC = () => {
                 <button
                   key={index}
                   onClick={() => sendMessage(action.text)}
-                  className="flex items-center p-3 glass-card hover:bg-white/10 transition-all duration-200 text-left"
+                  className="flex items-center p-3 sm:p-4 glass-card hover:bg-white/10 transition-all duration-200 text-left touch-manipulation touch-target active-scale"
                 >
                   <Icon className="h-5 w-5 text-primary mr-3 flex-shrink-0" />
-                  <span className="text-sm text-secondary">{action.text}</span>
+                  <span className="text-sm sm:text-base text-secondary">{action.text}</span>
                 </button>
               );
             })}
@@ -188,13 +188,13 @@ const ChatPage: React.FC = () => {
                   <audio controls src={audioUrl} className="h-8" />
                   <button
                     onClick={clearRecording}
-                    className="px-3 py-1 premium-button-secondary text-sm rounded-lg"
+                    className="px-3 py-1 premium-button-secondary text-sm rounded-lg touch-manipulation touch-target"
                   >
                     Clear
                   </button>
                   <button
                     onClick={() => sendMessage("Voice message: [Audio content transcription would appear here in production]")}
-                    className="px-3 py-1 premium-button-primary text-sm rounded-lg"
+                    className="px-3 py-1 premium-button-primary text-sm rounded-lg touch-manipulation touch-target"
                   >
                     Send
                   </button>
@@ -204,10 +204,10 @@ const ChatPage: React.FC = () => {
           )}
 
           {/* Input Form */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2 sm:space-x-3">
             <button
               onClick={handleVoiceInput}
-              className={`p-3 rounded-full transition-all duration-200 ${
+              className={`p-3 rounded-full transition-all duration-200 touch-manipulation touch-target active-scale ${
                 isRecording 
                   ? 'bg-red-500 text-white animate-pulse' 
                   : 'glass-card text-primary hover:bg-white/10'
@@ -223,12 +223,12 @@ const ChatPage: React.FC = () => {
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder="Ask me anything about travel in India..."
-                className="w-full px-4 py-3 glass-input rounded-2xl pr-12"
+                className="w-full px-3 sm:px-4 py-3 glass-input rounded-2xl pr-12 text-base"
               />
               <button
                 onClick={() => sendMessage()}
                 disabled={!inputText.trim()}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 premium-button-primary rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 premium-button-primary rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation touch-target"
               >
                 <Send className="h-4 w-4" />
               </button>

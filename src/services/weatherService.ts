@@ -16,8 +16,9 @@ export interface WeatherForecast {
 }
 
 // OpenWeatherMap API key - should be in .env file
-const API_KEY = 'c1c06459eef9fe52fc6d1208b9c556ac'; // Hardcoded for now to ensure it works
+const API_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY || 'c1c06459eef9fe52fc6d1208b9c556ac';
 const API_BASE_URL = 'https://api.openweathermap.org/data/2.5';
+const GEO_API_URL = 'https://api.openweathermap.org/geo/1.0'; // Geocoding uses different base URL
 
 // Function to fetch weather data for a city
 export const fetchWeatherForecast = async (city: string): Promise<WeatherForecast> => {
@@ -33,13 +34,17 @@ export const fetchWeatherForecast = async (city: string): Promise<WeatherForecas
     
     console.log('Fetching weather for city:', city);
     
-    // First get coordinates for the city
+    // First get coordinates for the city (geocoding API has different base URL)
     const geoResponse = await fetch(
-      `${API_BASE_URL}/geo/1.0/direct?q=${encodeURIComponent(city)}&limit=1&appid=${API_KEY}`
+      `${GEO_API_URL}/direct?q=${encodeURIComponent(city)}&limit=1&appid=${API_KEY}`
     );
     
     if (!geoResponse.ok) {
-      throw new Error('Failed to fetch city coordinates');
+      if (geoResponse.status === 401) {
+        console.error('OpenWeather API key is invalid or expired. Please check VITE_OPENWEATHER_API_KEY in your .env file');
+        console.error('Get a free API key at: https://openweathermap.org/api');
+      }
+      throw new Error(`Failed to fetch city coordinates (${geoResponse.status})`);
     }
     
     const geoData = await geoResponse.json();
@@ -92,7 +97,12 @@ export const fetchWeatherForecast = async (city: string): Promise<WeatherForecas
     };
   } catch (error) {
     console.error('Error fetching weather data:', error);
-    throw error;
+    // Return empty forecast instead of throwing - weather is non-critical
+    console.warn('Weather data unavailable - continuing without weather info');
+    return {
+      daily: [],
+      lastUpdated: new Date()
+    };
   }
 };
 

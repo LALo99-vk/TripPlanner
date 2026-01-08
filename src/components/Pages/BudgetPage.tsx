@@ -1080,10 +1080,10 @@ const BudgetPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe">
       <div className="content-container">
         {/* Header */}
-        <div className="text-center mb-10">
+        <div className="text-center mb-6 sm:mb-10">
           <h1 className="text-4xl font-bold text-primary mb-4">Budget Planner</h1>
           <p className="text-xl text-secondary">
             Track expenses and optimize your travel budget smartly
@@ -1092,7 +1092,7 @@ const BudgetPage: React.FC = () => {
 
         {/* Group Selection Dropdown */}
         <div className="mb-10">
-          <div className="glass-card p-6">
+          <div className="glass-card p-4 sm:p-6">
             <div className="flex items-center gap-3 mb-4">
               <Wallet className="h-5 w-5 text-primary" />
               <label className="block text-lg font-semibold text-primary">Select Group</label>
@@ -1266,7 +1266,7 @@ const BudgetPage: React.FC = () => {
 
                 {/* AI-Predicted Budget Plan */}
                 {(aiBudget || finalizedPlan) && (
-                  <div className="glass-card p-6">
+                  <div className="glass-card p-4 sm:p-6">
                     <h2 className="text-2xl font-bold text-primary mb-6 flex items-center">
                       <Brain className="h-6 w-6 mr-2 text-blue-400" />
                       AI-Predicted Budget Plan
@@ -1336,7 +1336,7 @@ const BudgetPage: React.FC = () => {
 
                 {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="glass-card p-6">
+                <div className="glass-card p-4 sm:p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-secondary">Total Budget</p>
@@ -1348,7 +1348,7 @@ const BudgetPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="glass-card p-6">
+                <div className="glass-card p-4 sm:p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-secondary">Total Spent</p>
@@ -1370,7 +1370,7 @@ const BudgetPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="glass-card p-6">
+                <div className="glass-card p-4 sm:p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-secondary">Remaining</p>
@@ -1406,7 +1406,7 @@ const BudgetPage: React.FC = () => {
               )}
 
               {/* Category Breakdown (User Actual vs Budget, with AI reference per category if available) */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-primary">Category Breakdown (Actual vs Budget)</h2>
                   <div className="flex items-center gap-3">
@@ -1595,7 +1595,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Member Budget Share & Balances */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-primary">
                     💸 Member Budget Share & Balances
@@ -1611,7 +1611,7 @@ const BudgetPage: React.FC = () => {
                         setEditingBudgetShares(initialShares);
                         setShowBudgetShareModal(true);
                       }}
-                      className="premium-button-secondary flex items-center gap-2 text-sm"
+                      className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 text-sm"
                     >
                       <PlusCircle className="h-4 w-4" />
                       Assign Budget Shares
@@ -1772,7 +1772,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Member Contribution & Personal Expense Log */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
@@ -1799,7 +1799,7 @@ const BudgetPage: React.FC = () => {
                         setEditingBudgetShares(initialShares);
                         setShowBudgetShareModal(true);
                       }}
-                      className="premium-button-secondary flex items-center gap-2 text-sm ml-4"
+                      className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 text-sm ml-4"
                     >
                       <PlusCircle className="h-4 w-4" />
                       Manage Contributions
@@ -1879,7 +1879,7 @@ const BudgetPage: React.FC = () => {
                         {selectedMemberIds.length > 0 && (
                           <button
                             onClick={() => setSelectedMemberIds([])}
-                            className="premium-button-secondary flex items-center gap-2 text-sm"
+                            className="premium-button-secondary touch-manipulation touch-target active-scale flex items-center gap-2 text-sm"
                           >
                             <X className="h-4 w-4" />
                             Clear
@@ -2030,7 +2030,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Recent Expenses */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <h2 className="text-2xl font-bold text-primary mb-6">Recent Expenses</h2>
                 <div className="space-y-3 max-h-96 overflow-y-auto">
                   {expenses.length === 0 ? (
@@ -2091,7 +2091,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Settlement Calculator (Live Updates) */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <div className="mb-6">
                   <div className="flex items-center justify-between mb-2">
                     <h2 className="text-2xl font-bold text-primary flex items-center gap-2">
@@ -2255,7 +2255,7 @@ const BudgetPage: React.FC = () => {
 
             {/* Add Expense Form */}
             <div className="space-y-6">
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <h2 className="text-2xl font-bold text-primary mb-6 flex items-center">
                   <PlusCircle className="h-6 w-6 mr-2 text-green-400" />
                   Add Expense
@@ -2526,7 +2526,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Spending Distribution by Category */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <h3 className="text-lg font-bold text-primary mb-4">Spending Distribution</h3>
 
                 <div className="relative h-48 glass-card w-full overflow-hidden">
@@ -2563,7 +2563,7 @@ const BudgetPage: React.FC = () => {
               </div>
 
               {/* Export Options */}
-              <div className="glass-card p-6">
+              <div className="glass-card p-4 sm:p-6">
                 <h3 className="text-lg font-bold text-primary mb-4">Export & Share</h3>
                 <div className="space-y-3">
                   <button
@@ -2610,7 +2610,7 @@ const BudgetPage: React.FC = () => {
                   <button
                     onClick={getAIBudgetAnalysis}
                     disabled={isAnalyzing}
-                    className="premium-button-primary px-3 py-1 rounded-lg text-sm font-semibold disabled:opacity-50"
+                    className="premium-button-primary touch-manipulation touch-target active-scale px-3 py-1 rounded-lg text-sm font-semibold disabled:opacity-50"
                   >
                     {isAnalyzing ? 'Analyzing...' : 'Get AI Tips'}
                   </button>
@@ -2744,7 +2744,7 @@ const BudgetPage: React.FC = () => {
               <div className="flex items-center justify-between">
                 <button
                   onClick={() => setShowBudgetShareModal(false)}
-                  className="premium-button-secondary"
+                  className="premium-button-secondary touch-manipulation touch-target active-scale"
                 >
                   Cancel
                 </button>
@@ -2803,7 +2803,7 @@ const BudgetPage: React.FC = () => {
                     }
                   }}
                   disabled={savingBudgetShares}
-                  className="premium-button-primary disabled:opacity-50"
+                  className="premium-button-primary touch-manipulation touch-target active-scale disabled:opacity-50"
                 >
                   {savingBudgetShares ? 'Saving...' : 'Save Budget Shares'}
                 </button>

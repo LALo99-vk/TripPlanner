@@ -254,7 +254,7 @@ const GroupPage: React.FC = () => {
           </div>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="premium-button-primary flex items-center gap-2"
+            className="premium-button-primary touch-manipulation touch-target active-scale flex items-center gap-2"
           >
             <Plus className="h-5 w-5" />
             Create New Group Trip
@@ -291,7 +291,7 @@ const GroupPage: React.FC = () => {
                         });
                     }
                   }}
-                  className="premium-button-secondary text-sm"
+                  className="premium-button-secondary touch-manipulation touch-target active-scale text-sm"
                 >
                   Retry
                 </button>
@@ -302,7 +302,7 @@ const GroupPage: React.FC = () => {
                 <p className="text-muted text-sm mb-4">No groups yet</p>
                 <button
                   onClick={() => setShowCreateModal(true)}
-                  className="premium-button-secondary text-sm"
+                  className="premium-button-secondary touch-manipulation touch-target active-scale text-sm"
                 >
                   Create Your First Group
                 </button>

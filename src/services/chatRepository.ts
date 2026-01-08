@@ -6,7 +6,7 @@ export interface ChatMessage {
   groupId: string;
   senderId: string;
   senderName: string;
-  messageType: 'text' | 'voice';
+  messageType: 'text' | 'voice' | 'sos';
   text: string | null;
   voiceUrl: string | null;
   voiceDuration: number | null;
@@ -14,6 +14,12 @@ export interface ChatMessage {
   edited: boolean;
   createdAt: string;
   updatedAt: string;
+  // SOS-specific fields
+  sosLocation?: {
+    lat: number;
+    lng: number;
+  };
+  sosTimestamp?: string;
 }
 
 export interface SendMessageData {
@@ -21,6 +27,23 @@ export interface SendMessageData {
   voiceUrl?: string;
   voiceDuration?: number;
   mentions?: string[];
+}
+
+export interface SOSAlertData {
+  location: {
+    lat: number;
+    lng: number;
+  };
+  timestamp: string;
+}
+
+export interface LocationUpdateData {
+  location: {
+    lat: number;
+    lng: number;
+  };
+  timestamp: string;
+  updateNumber: number;
 }
 
 /**
@@ -54,6 +77,86 @@ export async function sendMessage(
 
   if (error) {
     console.error('Error sending message:', error);
+    throw error;
+  }
+
+  return mapMessageData(messageData);
+}
+
+/**
+ * Send SOS alert to group chat with location
+ */
+export async function sendSOSAlert(
+  groupId: string,
+  userId: string,
+  userName: string,
+  sosData: SOSAlertData
+): Promise<ChatMessage> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  const locationUrl = `https://www.google.com/maps?q=${sosData.location.lat},${sosData.location.lng}`;
+  const alertText = `🆘 EMERGENCY ALERT 🆘\n${userName} has activated SOS!\n📍 Location: ${locationUrl}\n⏰ Time: ${new Date(sosData.timestamp).toLocaleString()}`;
+
+  const { data: messageData, error } = await supabase
+    .from('group_chat_messages')
+    .insert({
+      group_id: groupId,
+      sender_id: userId,
+      sender_name: userName,
+      message_type: 'sos',
+      text: alertText,
+      voice_url: null,
+      voice_duration: null,
+      mentions: [], // Mention all members
+      edited: false,
+      sos_location: sosData.location,
+      sos_timestamp: sosData.timestamp,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error sending SOS alert:', error);
+    throw error;
+  }
+
+  return mapMessageData(messageData);
+}
+
+/**
+ * Send location update to group chat (periodic update during active SOS)
+ */
+export async function sendLocationUpdate(
+  groupId: string,
+  userId: string,
+  userName: string,
+  updateData: LocationUpdateData
+): Promise<ChatMessage> {
+  const supabase = await getAuthenticatedSupabaseClient();
+
+  const locationUrl = `https://www.google.com/maps?q=${updateData.location.lat},${updateData.location.lng}`;
+  const alertText = `📍 LOCATION UPDATE #${updateData.updateNumber}\n${userName}'s current location\n📍 ${locationUrl}\n⏰ ${new Date(updateData.timestamp).toLocaleString()}`;
+
+  const { data: messageData, error } = await supabase
+    .from('group_chat_messages')
+    .insert({
+      group_id: groupId,
+      sender_id: userId,
+      sender_name: userName,
+      message_type: 'sos', // Still use 'sos' type for styling
+      text: alertText,
+      voice_url: null,
+      voice_duration: null,
+      mentions: [],
+      edited: false,
+      sos_location: updateData.location,
+      sos_timestamp: updateData.timestamp,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error sending location update:', error);
     throw error;
   }
 
@@ -250,6 +353,8 @@ function mapMessageData(data: any): ChatMessage {
     edited: data.edited,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
+    sosLocation: data.sos_location,
+    sosTimestamp: data.sos_timestamp,
   };
 }
 

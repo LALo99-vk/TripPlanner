@@ -1,2 +1,10 @@
 in the intinary give me an option to change the plan like if i imported a wrong plan i need an option to change it to new one and i need some function to do this 
 in the communication hub the messages appear after i switch tabs i need the msg to appear immediately and the voice chat is not working properly i need the msg to travel so please fix that too and these chats should be working in the production time too so make sure this part that is "communictaio hub" is almost production ready so that when new users enter through invites they recieve the msgs sent here 
+
+
+
+
+
+npm install -g localtunnel
+
+lt --port 3001

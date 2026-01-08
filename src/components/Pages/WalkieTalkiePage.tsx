@@ -123,7 +123,7 @@ const WalkieTalkiePage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe">
       <div className="content-container">
         {/* Header */}
         <div className="text-center mb-10">
@@ -139,7 +139,7 @@ const WalkieTalkiePage: React.FC = () => {
           {/* Main Control Panel */}
           <div className="lg:col-span-2 space-y-6">
             {/* Connection Status */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center space-x-3">
                   <div className={`w-4 h-4 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
@@ -219,7 +219,7 @@ const WalkieTalkiePage: React.FC = () => {
                     <audio controls src={audioUrl} className="flex-1" />
                     <button
                       onClick={sendVoiceMessage}
-                      className="premium-button-primary px-4 py-2 rounded-lg"
+                      className="premium-button-primary touch-manipulation touch-target active-scale px-4 py-2 rounded-lg"
                     >
                       Send
                     </button>
@@ -235,7 +235,7 @@ const WalkieTalkiePage: React.FC = () => {
             </div>
 
             {/* Message History */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h2 className="text-2xl font-bold text-primary mb-6">Recent Messages</h2>
               
               <div className="space-y-4 max-h-96 overflow-y-auto">
@@ -286,7 +286,7 @@ const WalkieTalkiePage: React.FC = () => {
           {/* Channels & Controls */}
           <div className="space-y-6">
             {/* Channel Selection */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h3 className="text-xl font-bold text-primary mb-4 flex items-center">
                 <Users className="h-5 w-5 mr-2 text-indigo-500" />
                 Channels
@@ -324,7 +324,7 @@ const WalkieTalkiePage: React.FC = () => {
             </div>
 
             {/* Tips */}
-            <div className="glass-card p-6">
+            <div className="glass-card p-4 sm:p-6">
               <h3 className="text-lg font-bold text-primary mb-4">💡 Tips</h3>
               <div className="space-y-3 text-sm text-secondary">
                 <p>• Keep messages short and clear</p>

@@ -64,16 +64,16 @@ const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
             time and helping your travel dreams scale effortlessly.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center px-4 sm:px-0">
             <button
               onClick={() => onPageChange('plan')}
-              className="premium-button-primary text-lg px-8 py-4"
+              className="premium-button-primary text-base sm:text-lg px-6 sm:px-8 py-3 sm:py-4 touch-manipulation touch-target active-scale"
             >
               Start Planning
             </button>
             <button
               onClick={() => onPageChange('chat')}
-              className="premium-button-secondary text-lg px-8 py-4"
+              className="premium-button-secondary text-base sm:text-lg px-6 sm:px-8 py-3 sm:py-4 touch-manipulation touch-target active-scale"
             >
               Learn More
             </button>

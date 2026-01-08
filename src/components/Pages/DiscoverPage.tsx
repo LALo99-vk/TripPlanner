@@ -1012,7 +1012,7 @@ const DiscoverPage: React.FC = () => {
                     <button
                       onClick={handleAddComment}
                       disabled={!newComment.trim() || isAddingComment}
-                      className="premium-button-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="premium-button-primary touch-manipulation touch-target active-scale px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isAddingComment ? (
                         <Loader2 className="h-5 w-5 animate-spin" />

@@ -614,16 +614,16 @@ const BookingPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-6 content-container">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen p-3 sm:p-6 pb-safe content-container">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
         {/* Header */}
-        <div className="glass-card p-6">
-          <h1 className="text-3xl font-bold text-white mb-2">Book Your Travel</h1>
-          <p className="text-white/70">Select your group and book flights, trains, and hotels</p>
+        <div className="glass-card p-4 sm:p-6">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Book Your Travel</h1>
+          <p className="text-sm sm:text-base text-white/70">Select your group and book flights, trains, and hotels</p>
         </div>
 
         {/* Group Selection */}
-        <div className="glass-card p-6">
+        <div className="glass-card p-4 sm:p-6">
           <label className="block text-white font-semibold mb-3">Select Group</label>
           <select
             value={selectedGroupId}
@@ -642,8 +642,8 @@ const BookingPage: React.FC = () => {
         
         {/* Plan Summary Card */}
         {planData && (
-          <div className="glass-card p-6">
-            <h2 className="text-2xl font-bold text-white mb-4">Trip Summary</h2>
+          <div className="glass-card p-4 sm:p-6">
+            <h2 className="text-xl sm:text-2xl font-bold text-white mb-4">Trip Summary</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="flex items-center space-x-3">
                 <MapPin className="w-5 h-5 text-white/70" />
@@ -693,7 +693,7 @@ const BookingPage: React.FC = () => {
 
         {/* Universal Search Bar */}
         {planData && (
-          <div className="glass-card p-6">
+          <div className="glass-card p-4 sm:p-6">
             <h2 className="text-xl font-bold text-white mb-4">Search Travel Options</h2>
             <div className="mb-4">
               <div className="flex gap-3">
@@ -779,7 +779,7 @@ const BookingPage: React.FC = () => {
         )}
 
         {/* Flights Section */}
-        <div className="glass-card p-6">
+        <div className="glass-card p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-3">
               <Plane className="w-6 h-6 text-white" />
