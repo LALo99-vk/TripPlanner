@@ -870,7 +870,7 @@ async function rateLimitedCall<T>(fn: () => Promise<T>): Promise<T> {
 
 // Search flights using AviationStack API
 async function searchFlightsAPI(origin: string, destination: string, date: string, travelers: number = 1): Promise<any[]> {
-  const AVIATIONSTACK_API_KEY = (process.env.AVIATIONSTACK_API_KEY || process.env.AVIATION_EDGE_API_KEY || 'c7b7255541e28224644dc8592cb4ace5').trim();
+  const AVIATIONSTACK_API_KEY = (process.env.AVIATIONSTACK_API_KEY || process.env.AVIATION_EDGE_API_KEY || '').trim();
   
   if (!AVIATIONSTACK_API_KEY || AVIATIONSTACK_API_KEY.length < 10) {
     console.error('❌ AVIATIONSTACK_API_KEY is missing or invalid. Please set it in your .env file.');
@@ -2858,7 +2858,12 @@ app.get('/api/trains/search', async (req, res) => {
 
 // StayAPI - Search hotels
 async function searchHotelsStayAPI(location: string, checkIn: string, checkOut: string, adults: number): Promise<any[]> {
-  const STAYAPI_KEY = 'sk_live_e1a6c24e52f82b630015743e0860f98de343ca2bc990b2cff213f645225827ef';
+  const STAYAPI_KEY = process.env.STAYAPI_KEY || process.env.HIGHNOTE_API_KEY;
+  
+  if (!STAYAPI_KEY) {
+    console.error('❌ STAYAPI_KEY is missing. Please set it in your .env file.');
+    return [];
+  }
   
   try {
     console.log(`🏨 Searching hotels: ${location} from ${checkIn} to ${checkOut}`);
