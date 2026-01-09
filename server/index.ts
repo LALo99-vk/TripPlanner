@@ -504,10 +504,10 @@ async function fetchWeatherForecast(city: string, startDate: string, endDate: st
         console.error(`   Current key being used: ${apiKeyToUse.substring(0, 4)}...${apiKeyToUse.substring(apiKeyToUse.length - 4)}`);
         return []; // Return empty array instead of throwing
       }
-      
-      // Don't throw - just return empty array so plan generation can continue
-      console.warn(`Skipping weather data for "${city}". Plan generation will continue without weather information.`);
-      return [];
+        
+        // Don't throw - just return empty array so plan generation can continue
+        console.warn(`Skipping weather data for "${city}". Plan generation will continue without weather information.`);
+        return [];
     }
     
     const geoData = await geoResponse.json() as GeoLocationResponse[];
@@ -1412,7 +1412,7 @@ async function generateSingleDayPlan(params: {
   travelMonth: number;
   seasonalValidation: SeasonalValidation;
 }): Promise<any> {
-  const {  
+  const {
     dayNumber,
     totalDays,
     date,
@@ -2235,7 +2235,7 @@ app.post('/api/ai/plan-trip', async (req, res) => {
     try {
       weatherForecast = await fetchWeatherForecast(to, startDate, endDate);
       if (weatherForecast && weatherForecast.length > 0) {
-        console.log(`✅ Weather forecast received: ${weatherForecast.length} days`);
+    console.log(`✅ Weather forecast received: ${weatherForecast.length} days`);
         console.log(`📊 Sample weather for Day 1:`, weatherForecast[0]);
       } else {
         console.warn('⚠️  Weather forecast returned empty array - weather data will not be available in plans');

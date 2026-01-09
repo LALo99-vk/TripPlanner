@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Header from './components/Layout/Header';
 import Sidebar from './components/Layout/Sidebar';
+import ChatSidebar from './components/Chat/ChatSidebar';
 import { useEffect } from 'react';
 import { auth } from './config/firebase';
 import { getLatestUserPlan } from './services/planRepository';
@@ -143,6 +144,9 @@ function App() {
           {renderPage()}
         </main>
       </div>
+      
+      {/* Global Chat Sidebar - Instagram style */}
+      <ChatSidebar />
     </div>
   );
 }

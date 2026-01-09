@@ -247,8 +247,8 @@ const EmergencyPage: React.FC = () => {
     
     // Only show loading state if it's not a background refresh
     if (!isBackgroundRefresh) {
-      setLoadingEmergency(true);
-      setEmergencyError(null);
+    setLoadingEmergency(true);
+    setEmergencyError(null);
     }
     
     try {
@@ -334,21 +334,21 @@ Provide real, accurate emergency information for ${destination}, India. Include 
       
       // Only show error if it's not a background refresh
       if (!isBackgroundRefresh) {
-        setEmergencyError(`Unable to generate emergency contacts for ${destination}. ${errorMessage} Showing general numbers.`);
-        
-        // Try to load from cache first
-        const cachedData = destination
-          ? localStorage.getItem(`emergency_contacts_cached_${destination}`)
-          : null;
-        if (cachedData) {
-          setEmergencyData(JSON.parse(cachedData));
+      setEmergencyError(`Unable to generate emergency contacts for ${destination}. ${errorMessage} Showing general numbers.`);
+      
+      // Try to load from cache first
+      const cachedData = destination
+        ? localStorage.getItem(`emergency_contacts_cached_${destination}`)
+        : null;
+      if (cachedData) {
+        setEmergencyData(JSON.parse(cachedData));
         }
       } else {
         console.log(`Background refresh failed, keeping cached data for ${destination}`);
       }
     } finally {
       if (!isBackgroundRefresh) {
-        setLoadingEmergency(false);
+      setLoadingEmergency(false);
       }
     }
   };
@@ -1056,13 +1056,13 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                   <div className="flex-1">
                     <h3 className="text-2xl font-bold text-primary mb-2">
                       Emergency Contacts
-                    </h3>
+              </h3>
                     {currentDestination && (
                       <p className="text-sm text-secondary">
                         📍 {currentDestination}
                         {latestPlanName && <span className="ml-2">• {latestPlanName}</span>}
                       </p>
-                    )}
+              )}
                   </div>
                   {currentDestination && !isOffline && (
                     <button
@@ -1075,16 +1075,16 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                       <span className="text-sm text-primary">Refresh</span>
                     </button>
                   )}
-                </div>
-              </div>
-
+                    </div>
+                  </div>
+                  
               {loadingEmergency && (
                 <div className="text-secondary text-sm mb-4 flex items-center">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   Fetching emergency contacts...
-                </div>
-              )}
-              
+                    </div>
+                  )}
+                  
               {/* Cache info */}
               {emergencyData && currentDestination && !loadingEmergency && (
                 <div className="text-xs text-secondary mb-4 flex items-center gap-2">
@@ -1114,7 +1114,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
               {emergencyError && !emergencyData && (
                 <div className="text-sm text-yellow-400 mb-4 p-3 glass-card border border-yellow-500/30">
                   ℹ️ {emergencyError}
-                </div>
+                    </div>
               )}
 
               {/* Main Emergency Numbers */}
@@ -1162,7 +1162,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                         <div className="flex items-center flex-1">
                           <span className="text-2xl mr-3">{service.icon}</span>
                           <span className="font-semibold text-primary text-base">{service.name}</span>
-                        </div>
+                  </div>
                         <a
                           href={`tel:${service.number}`}
                           className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-300 flex items-center ml-4"
@@ -1193,7 +1193,7 @@ Provide real, accurate emergency information for ${destination}, India. Include 
                               <div className="text-xs text-secondary mt-1 flex items-start">
                                 <MapPin className="h-3 w-3 mr-1 mt-0.5 flex-shrink-0" />
                                 {hospital.address}
-                              </div>
+            </div>
                             )}
                             {hospital.open24x7 && (
                               <span className="inline-block mt-2 px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded">

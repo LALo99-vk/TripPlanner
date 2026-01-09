@@ -355,23 +355,25 @@ export async function recalculateGroupMemberBalances(
     if (isPersonalExpense && payer) {
       // This is a personal expense - deduct from wallet
       payer.personalExpenses += amount;
+      // Personal expenses don't affect totalOwed (skip the splitBetween loop below)
+    } else {
+      // Only calculate totalOwed for shared expenses (not personal)
+      splitBetween.forEach((userId) => {
+        if (!totals.has(userId)) {
+          totals.set(userId, {
+            userName: directoryMap.get(userId) ?? 'Member',
+            totalPaid: 0,
+            totalOwed: 0,
+            personalExpenses: 0,
+          });
+        }
+
+        const memberTotals = totals.get(userId);
+        if (memberTotals) {
+          memberTotals.totalOwed += share;
+        }
+      });
     }
-
-    splitBetween.forEach((userId) => {
-      if (!totals.has(userId)) {
-        totals.set(userId, {
-          userName: directoryMap.get(userId) ?? 'Member',
-          totalPaid: 0,
-          totalOwed: 0,
-          personalExpenses: 0,
-        });
-      }
-
-      const memberTotals = totals.get(userId);
-      if (memberTotals) {
-        memberTotals.totalOwed += share;
-      }
-    });
   });
 
   const updates = Array.from(totals.entries()).map(([userId, value]) => {

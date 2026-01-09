@@ -588,6 +588,7 @@ export function subscribeGroupItinerary(
   callback: (activities: GroupItineraryActivity[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -598,7 +599,7 @@ export function subscribeGroupItinerary(
 
     // Subscribe to changes
     channel = supabase
-      .channel(`group-itinerary-${groupId}`)
+      .channel(`group-itinerary-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -612,7 +613,19 @@ export function subscribeGroupItinerary(
           callback(updatedActivities);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`📡 Itinerary subscription status for ${groupId}:`, status);
+      });
+    
+    // Polling fallback every 3 seconds for faster updates
+    pollInterval = setInterval(async () => {
+      try {
+        const freshActivities = await getGroupActivities(groupId);
+        callback(freshActivities);
+      } catch (err) {
+        console.error('Itinerary polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -624,6 +637,7 @@ export function subscribeGroupItinerary(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

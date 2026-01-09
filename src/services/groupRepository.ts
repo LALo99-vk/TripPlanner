@@ -214,6 +214,7 @@ export function subscribeToGroup(
   callback: (group: Group | null) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -224,7 +225,7 @@ export function subscribeToGroup(
 
     // Subscribe to changes
     channel = supabase
-      .channel(`group-${groupId}`)
+      .channel(`group-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -238,7 +239,19 @@ export function subscribeToGroup(
           callback(updatedGroup);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`📡 Group subscription status for ${groupId}:`, status);
+      });
+    
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const freshGroup = await getGroup(groupId);
+        callback(freshGroup);
+      } catch (err) {
+        console.error('Group polling error:', err);
+      }
+    }, 5000);
   };
 
   setupSubscription();
@@ -250,6 +263,7 @@ export function subscribeToGroup(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -261,6 +275,7 @@ export function subscribeUserGroups(
   callback: (groups: Group[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -271,7 +286,7 @@ export function subscribeUserGroups(
 
     // Subscribe to changes in user_groups junction table
     channel = supabase
-      .channel(`user-${userId}-groups`)
+      .channel(`user-${userId}-groups-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -299,7 +314,19 @@ export function subscribeUserGroups(
           callback(updatedGroups);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`📡 User groups subscription status:`, status);
+      });
+    
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const freshGroups = await getUserGroups(userId);
+        callback(freshGroups);
+      } catch (err) {
+        console.error('User groups polling error:', err);
+      }
+    }, 5000);
   };
 
   setupSubscription();
@@ -311,6 +338,7 @@ export function subscribeUserGroups(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

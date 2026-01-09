@@ -274,6 +274,7 @@ export function subscribeGroupChat(
 ): () => void {
   let channel: RealtimeChannel | null = null;
   let messagesSnapshot: ChatMessage[] = [];
+  let isSubscribed = false;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -283,45 +284,51 @@ export function subscribeGroupChat(
     callback(messagesSnapshot);
 
     // Subscribe to changes (delta-based for faster UI)
-    channel = supabase.channel(`group-chat-${groupId}`);
+    channel = supabase.channel(`group-chat-${groupId}-${Date.now()}`);
 
-    channel.on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-      (payload: any) => {
-        const msg = mapMessageData(payload.new);
-        // Append the new message
-        messagesSnapshot = [...messagesSnapshot, msg];
-        callback(messagesSnapshot);
-      }
-    );
-
-    channel.on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-      (payload: any) => {
-        const updated = mapMessageData(payload.new);
-        const idx = messagesSnapshot.findIndex((m) => m.id === updated.id);
-        if (idx !== -1) {
-          const next = [...messagesSnapshot];
-          next[idx] = updated;
-          messagesSnapshot = next;
+    channel
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+        (payload: any) => {
+          console.log('📨 New message received:', payload.new?.id);
+          const msg = mapMessageData(payload.new);
+          // Check if message already exists (avoid duplicates from optimistic update)
+          if (!messagesSnapshot.some(m => m.id === msg.id)) {
+            messagesSnapshot = [...messagesSnapshot, msg];
+            callback(messagesSnapshot);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+        (payload: any) => {
+          const updated = mapMessageData(payload.new);
+          const idx = messagesSnapshot.findIndex((m) => m.id === updated.id);
+          if (idx !== -1) {
+            const next = [...messagesSnapshot];
+            next[idx] = updated;
+            messagesSnapshot = next;
+            callback(messagesSnapshot);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+        (payload: any) => {
+          const id = payload.old?.id as string;
+          messagesSnapshot = messagesSnapshot.filter((m) => m.id !== id);
           callback(messagesSnapshot);
         }
-      }
-    );
-
-    channel.on(
-      'postgres_changes',
-      { event: 'DELETE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-      (payload: any) => {
-        const id = payload.old?.id as string;
-        messagesSnapshot = messagesSnapshot.filter((m) => m.id !== id);
-        callback(messagesSnapshot);
-      }
-    );
-
-    channel.subscribe();
+      )
+      .subscribe((status) => {
+        console.log(`📡 Chat subscription status for ${groupId}:`, status);
+        if (status === 'SUBSCRIBED') {
+          isSubscribed = true;
+        }
+      });
   };
 
   setupSubscription();
@@ -329,11 +336,36 @@ export function subscribeGroupChat(
   // Return unsubscribe function
   return () => {
     if (channel) {
+      console.log(`📴 Unsubscribing from chat ${groupId}`);
       getAuthenticatedSupabaseClient().then((supabase) => {
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
   };
+}
+
+/**
+ * Add a message to existing subscription (for optimistic updates)
+ */
+export function addOptimisticMessage(
+  messages: ChatMessage[],
+  newMessage: Partial<ChatMessage>
+): ChatMessage[] {
+  const optimisticMsg: ChatMessage = {
+    id: `temp-${Date.now()}`,
+    groupId: newMessage.groupId || '',
+    senderId: newMessage.senderId || '',
+    senderName: newMessage.senderName || '',
+    messageType: newMessage.messageType || 'text',
+    text: newMessage.text || null,
+    voiceUrl: null,
+    voiceDuration: null,
+    mentions: [],
+    edited: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  return [...messages, optimisticMsg];
 }
 
 /**

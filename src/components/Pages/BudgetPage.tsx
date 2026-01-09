@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { PlusCircle, DollarSign, TrendingUp, PieChart, Download, Share, Wallet, MapPin, Calendar, Crown, Brain, Users, X, Lock, Unlock, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { PlusCircle, DollarSign, TrendingUp, PieChart, Download, Share, Wallet, MapPin, Calendar, Crown, Users, X, Lock, Unlock, AlertCircle, CheckCircle2, Loader2, Settings, Trash2 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { apiService } from '../../services/api';
 import { jsPDF } from 'jspdf';
 import { sendMessage } from '../../services/chatRepository';
+import BudgetSetupGuide from '../Budget/BudgetSetupGuide';
+import CategoryTemplateModal from '../Budget/CategoryTemplateModal';
 import {
   addGroupExpense,
   ensureGroupMemberRecords,
@@ -72,10 +74,12 @@ const BudgetPage: React.FC = () => {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [editingCategories, setEditingCategories] = useState<Array<{ name: string; budget: string; color: string; description?: string }>>([]);
   const [savingCategories, setSavingCategories] = useState(false);
-  const [showAiSyncConfirm, setShowAiSyncConfirm] = useState(false);
   const [editingSingleCategory, setEditingSingleCategory] = useState<{ category: string; budget: string; color: string; description?: string } | null>(null);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [showSetBudgetModal, setShowSetBudgetModal] = useState(false);
+  const [newTotalBudget, setNewTotalBudget] = useState('');
   const [newExpense, setNewExpense] = useState<NewExpenseFormState>({
     category: '',
     amount: '',
@@ -191,24 +195,24 @@ const BudgetPage: React.FC = () => {
           getFinalizedPlan(groupId),
         ]);
 
-        // Use finalized plan budget if available, otherwise use existing budget
+        // Use finalized plan total budget if available (but NOT categories - let leader create their own)
         let finalBudget: GroupBudgetRecord | null = budgetData;
         if (finalizedPlanData) {
           if (!budgetData) {
-            // Create budget from finalized plan
+            // Create budget with total from finalized plan, but empty categories (leader creates their own)
             finalBudget = await upsertGroupBudget({
               groupId: groupId,
               totalBudget: finalizedPlanData.totalEstimatedBudget,
               createdBy: user.uid,
-              categoryAllocations: finalizedPlanData.categoryBudgets || {},
+              categoryAllocations: {}, // Empty - let leader create their own categories
             });
-          } else if (budgetData.totalBudget !== finalizedPlanData.totalEstimatedBudget) {
-            // Update existing budget to match finalized plan
+          } else if (budgetData.totalBudget !== finalizedPlanData.totalEstimatedBudget && Object.keys(budgetData.categoryAllocations || {}).length === 0) {
+            // Only update total budget if leader hasn't created categories yet
             finalBudget = await upsertGroupBudget({
               groupId: groupId,
               totalBudget: finalizedPlanData.totalEstimatedBudget,
               createdBy: user.uid,
-              categoryAllocations: finalizedPlanData.categoryBudgets || {},
+              categoryAllocations: budgetData.categoryAllocations || {}, // Keep existing categories
             });
           }
         }
@@ -251,24 +255,25 @@ const BudgetPage: React.FC = () => {
 
     loadData();
 
-    // Subscribe to finalized plan changes
+    // Subscribe to finalized plan changes (only update total budget, NOT categories)
     let unsubscribePlan: (() => void) | null = null;
     if (groupId) {
       unsubscribePlan = subscribeToFinalizedPlan(groupId, async (plan) => {
         setFinalizedPlan(plan);
-        // If there's a finalized plan, sync the budget
+        // If there's a finalized plan and no budget exists, create one with just the total
         if (plan) {
           const currentBudget = await getGroupBudget(groupId);
-          if (!currentBudget || currentBudget.totalBudget !== plan.totalEstimatedBudget) {
-            // Create or update budget to match finalized plan
+          if (!currentBudget) {
+            // Create budget with total from plan, but empty categories (leader creates their own)
             const newBudget = await upsertGroupBudget({
               groupId: groupId,
               totalBudget: plan.totalEstimatedBudget,
               createdBy: user.uid,
-              categoryAllocations: plan.categoryBudgets || {},
+              categoryAllocations: {}, // Empty - let leader create their own
             });
             setBudget(newBudget);
           }
+          // Don't auto-update if budget already exists - leader has control
         }
       });
     }
@@ -300,85 +305,6 @@ const BudgetPage: React.FC = () => {
       userName: member.name,
     }));
   }, [group]);
-
-  // AI Budget from finalized plan (reference only)
-  const [aiBudget, setAiBudget] = useState<{
-    total: number;
-    categories: Record<string, { budgeted: number; color?: string }>;
-  } | null>(null);
-
-  // Fetch category budgets from plans table if missing in finalizedPlan
-  useEffect(() => {
-    const loadCategoryBudgets = async () => {
-      if (!finalizedPlan) {
-        setAiBudget(null);
-        return;
-      }
-
-      let categoryBudgets = finalizedPlan.categoryBudgets || null;
-
-      // If categoryBudgets is missing or empty, try to fetch from plans table
-      if ((!categoryBudgets || Object.keys(categoryBudgets).length === 0) && finalizedPlan.planId) {
-        try {
-          const supabase = await getAuthenticatedSupabaseClient();
-          const { data: planData } = await supabase
-            .from('plans')
-            .select('category_budgets, optimized_budget, total_estimated_budget, plan_data')
-            .eq('id', finalizedPlan.planId)
-            .single();
-
-          if (planData) {
-            // Try to get category_budgets from plans table
-            let rawCategoryBudgets =
-              planData.category_budgets ||
-              (planData.plan_data as any)?.totals?.breakdown ||
-              null;
-
-            // If still no category budgets, try plan_data.totals.breakdown
-            if (!rawCategoryBudgets && (planData.plan_data as any)?.totals) {
-              const totals = (planData.plan_data as any).totals;
-              if (totals.breakdown) {
-                rawCategoryBudgets = totals.breakdown;
-              }
-            }
-
-            // Normalize category budgets format
-            if (rawCategoryBudgets) {
-              // Check if it's already in the correct format { category: { budgeted: number, color?: string } }
-              const firstKey = Object.keys(rawCategoryBudgets)[0];
-              const firstValue = rawCategoryBudgets[firstKey];
-
-              if (firstValue && typeof firstValue === 'object' && 'budgeted' in firstValue) {
-                // Already in correct format
-                categoryBudgets = rawCategoryBudgets;
-              } else {
-                // Convert from simple format { category: number } to { category: { budgeted: number } }
-                const normalizedBudgets: Record<string, { budgeted: number; color: string }> = {};
-                Object.entries(rawCategoryBudgets).forEach(([category, value], index) => {
-                  const amount = typeof value === 'number' ? value : (value as any)?.budgeted || 0;
-                  normalizedBudgets[category] = {
-                    budgeted: amount,
-                    color: colorPalette[index % colorPalette.length],
-                  };
-                });
-                categoryBudgets = normalizedBudgets;
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Error fetching category budgets from plans table:', error);
-        }
-      }
-
-      const finalCategoryBudgets = categoryBudgets || {};
-      setAiBudget({
-      total: finalizedPlan.totalEstimatedBudget || 0,
-        categories: finalCategoryBudgets,
-      });
-    };
-
-    loadCategoryBudgets();
-  }, [finalizedPlan]);
 
   // User's actual budget and expenses
   const totalBudget = finalizedPlan?.totalEstimatedBudget ?? budget?.totalBudget ?? 0;
@@ -444,6 +370,13 @@ const BudgetPage: React.FC = () => {
   }, [expenses, budget]);
 
   // Calculate member budget shares and balances
+  // Check if current user has a budget share assigned
+  const currentUserHasBudgetShare = useMemo(() => {
+    if (!user) return false;
+    const currentUserMember = members.find((m) => m.userId === user.uid);
+    return currentUserMember && currentUserMember.budgetShare > 0;
+  }, [user, members]);
+
   const memberBudgetShares = useMemo(() => {
     if (!group) return [];
 
@@ -929,14 +862,30 @@ const BudgetPage: React.FC = () => {
       return;
     }
 
-    if (newExpense.splitBetween.length === 0) {
-      showToast('Please select at least one member to split this expense.', 'error');
-      return;
+    // Auto-select payer if no one is selected (creates a personal expense)
+    let splitBetween = newExpense.splitBetween;
+    if (splitBetween.length === 0) {
+      // Auto-select the payer for a personal expense
+      splitBetween = [newExpense.paidById];
+      setNewExpense(prev => ({
+        ...prev,
+        splitBetween: [newExpense.paidById!],
+      }));
     }
 
     const payer = group.members.find((member) => member.uid === newExpense.paidById);
     if (!payer) {
       showToast('Invalid payer selected. Please try again.', 'error');
+      return;
+    }
+
+    // Check if payer has a budget share assigned
+    const payerMemberRecord = members.find((m) => m.userId === payer.uid);
+    if (!payerMemberRecord || payerMemberRecord.budgetShare === 0 || payerMemberRecord.budgetShare === null || payerMemberRecord.budgetShare === undefined) {
+      showToast(
+        `Cannot add expense: ${payer.name} does not have a budget share assigned. Please ask the group leader to assign a budget share first.`,
+        'error'
+      );
       return;
     }
 
@@ -957,7 +906,7 @@ const BudgetPage: React.FC = () => {
       description: newExpense.description,
       paidBy: payer.name,
       paidById: payer.uid,
-      splitBetween: newExpense.splitBetween,
+      splitBetween: splitBetween,
       date: expenseDate,
       receiptUrl: undefined,
       createdAt: new Date().toISOString(),
@@ -984,7 +933,7 @@ const BudgetPage: React.FC = () => {
         description: newExpense.description,
         paidById: payer.uid,
         paidByName: payer.name,
-        splitBetween: newExpense.splitBetween,
+        splitBetween: splitBetween,
         date: new Date(newExpense.date),
         receiptUrl,
       });
@@ -1177,6 +1126,42 @@ const BudgetPage: React.FC = () => {
           </div>
         ) : (
           <>
+            {/* Budget Setup Guide - For Leaders */}
+            <BudgetSetupGuide
+              totalBudget={totalBudget}
+              hasCategories={!!(budget?.categoryAllocations && Object.keys(budget.categoryAllocations).length > 0)}
+              hasMemberShares={members.some(m => m.budgetShare > 0)}
+              memberCount={members.length}
+              isLeader={isLeader}
+              onSetBudget={() => {
+                setNewTotalBudget(totalBudget > 0 ? totalBudget.toString() : '');
+                setShowSetBudgetModal(true);
+              }}
+              onManageCategories={() => {
+                // Initialize editing categories from current budget
+                const currentCategories = budget?.categoryAllocations
+                  ? Object.entries(budget.categoryAllocations).map(([name, allocation]) => ({
+                      name,
+                      budget: allocation.budgeted.toString(),
+                      color: allocation.color || colorPalette[0],
+                      description: allocation.description || '',
+                    }))
+                  : [];
+                setEditingCategories(currentCategories);
+                setShowCategoryManager(true);
+              }}
+              onAssignShares={() => {
+                // Initialize budget share editing
+                const shareMap: Record<string, string> = {};
+                members.forEach((m) => {
+                  shareMap[m.userId] = m.budgetShare > 0 ? m.budgetShare.toString() : '';
+                });
+                setEditingBudgetShares(shareMap);
+                setShowBudgetShareModal(true);
+              }}
+              onApplyTemplate={() => setShowTemplateModal(true)}
+            />
+
             {/* Budget Sync Banner */}
             {finalizedPlan?.syncedToBudget && finalizedPlan.syncedAt && (
               <div className="mb-6 glass-card p-4 bg-green-400/10 border border-green-400/30 rounded-lg">
@@ -1264,76 +1249,6 @@ const BudgetPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* AI-Predicted Budget Plan */}
-                {(aiBudget || finalizedPlan) && (
-                  <div className="glass-card p-4 sm:p-6">
-                    <h2 className="text-2xl font-bold text-primary mb-6 flex items-center">
-                      <Brain className="h-6 w-6 mr-2 text-blue-400" />
-                      AI-Predicted Budget Plan
-                    </h2>
-                    
-                    <div className="mb-6">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-secondary">Total AI Budget</p>
-                          <p className="text-3xl font-bold text-blue-400">
-                            ₹{(aiBudget?.total || finalizedPlan?.totalEstimatedBudget || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </p>
-                        </div>
-                        <Brain className="h-12 w-12 text-blue-400" />
-                      </div>
-                    </div>
-
-                    <div className="space-y-3">
-                      <h3 className="text-lg font-semibold text-primary mb-3">Category Breakdown</h3>
-                      {(!aiBudget || !aiBudget.categories || Object.keys(aiBudget.categories).length === 0) ? (
-                        <div className="text-secondary text-sm text-center py-6 bg-white/5 rounded-lg border border-white/10">
-                          <p className="mb-2">No category breakdown available.</p>
-                          <p className="text-xs">Category budgets will appear here once the AI plan includes category allocations.</p>
-                          {finalizedPlan && !aiBudget && (
-                            <p className="text-xs mt-2 text-blue-400">Loading category breakdown from plan...</p>
-                          )}
-                        </div>
-                      ) : (
-                        Object.entries(aiBudget.categories).map(([category, allocation], index) => {
-                          const isCatLocked = budget?.lockedCategories?.includes(category) || false;
-                          return (
-                        <div
-                          key={`${category}-${index}`}
-                              className={`p-3 glass-card hover:bg-white/5 transition-all duration-300 ${
-                                isCatLocked ? 'border-l-4 border-orange-400/50 bg-orange-400/5' : ''
-                              }`}
-                        >
-                          <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                              <div
-                                    className="w-4 h-4 rounded-full"
-                                style={{ backgroundColor: allocation.color || colorPalette[index % colorPalette.length] }}
-                              ></div>
-                              <span className="font-medium text-primary">{category}</span>
-                                  {isCatLocked && (
-                                    <span className="flex items-center gap-1 text-xs text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded-full">
-                                      <Lock className="h-3 w-3" />
-                                      Locked
-                                    </span>
-                                  )}
-                            </div>
-                            <span className="text-sm text-blue-300">
-                              ₹{(allocation.budgeted || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </span>
-                          </div>
-                        </div>
-                          );
-                        })
-                      )}
-                    </div>
-
-                    <div className="mt-4 text-xs text-secondary bg-blue-400/10 px-3 py-2 rounded-lg">
-                      This is the AI-predicted budget for your trip. Use it as a reference while planning your actual expenses.
-                    </div>
-                  </div>
-                )}
-
                 {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="glass-card p-4 sm:p-6">
@@ -1412,16 +1327,6 @@ const BudgetPage: React.FC = () => {
                   <div className="flex items-center gap-3">
                     {isLeader && (
                       <>
-                        {aiBudget && aiBudget.categories && Object.keys(aiBudget.categories).length > 0 && (
-                          <button
-                            onClick={() => setShowAiSyncConfirm(true)}
-                            className="text-xs premium-button-secondary flex items-center gap-1 px-3 py-1.5"
-                            title="Sync categories from AI plan"
-                          >
-                            <Brain className="h-3 w-3" />
-                            Sync from AI
-                          </button>
-                        )}
                         <button
                           onClick={() => {
                             // Initialize editing state with current categories
@@ -1472,9 +1377,6 @@ const BudgetPage: React.FC = () => {
                       const percentage =
                         category.budgeted > 0 ? (category.spent / category.budgeted) * 100 : 0;
                       const remainingForCategory = category.budgeted - category.spent;
-                      const aiAllocation =
-                        (aiBudget?.categories as any)?.[category.category] ?? null;
-                      const aiBudgetAmount = aiAllocation?.budgeted ?? null;
                       const isLocked = budget?.lockedCategories?.includes(category.category) || false;
                       return (
                         <div
@@ -1535,22 +1437,12 @@ const BudgetPage: React.FC = () => {
                                 </>
                               )}
                             </div>
-                            <div className="text-right text-xs text-secondary space-y-1">
-                              {aiBudgetAmount !== null && (
-                                <div>
-                                  <span className="font-medium text-blue-300">AI Budget</span>{' '}
-                                  <span>
-                                    ₹{aiBudgetAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                              )}
-                              <div>
-                                <span className="font-medium text-primary">Actual</span>{' '}
-                                <span>
-                                  ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
-                                  / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                                </span>
-                              </div>
+                            <div className="text-right text-xs text-secondary">
+                              <span className="font-medium text-primary">Spent</span>{' '}
+                              <span>
+                                ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                                / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
                             </div>
                           </div>
                           <div className="w-full bg-white/10 rounded-full h-3">
@@ -2267,6 +2159,19 @@ const BudgetPage: React.FC = () => {
                   </div>
                 )}
 
+                {user && !currentUserHasBudgetShare && (
+                  <div className="mb-4 p-4 bg-red-400/10 border border-red-400/30 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertCircle className="h-5 w-5 text-red-400" />
+                      <h3 className="text-sm font-semibold text-red-400">Budget Share Required</h3>
+                    </div>
+                    <p className="text-xs text-secondary">
+                      You cannot add expenses until the group leader assigns you a budget share. 
+                      Please contact the leader to set your contribution amount.
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-secondary mb-2">
@@ -2295,7 +2200,7 @@ const BudgetPage: React.FC = () => {
                               ? 'border-2 border-orange-400/50 bg-orange-400/5'
                               : ''
                           }`}
-                          disabled={!user || isSavingExpense}
+                          disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                         >
                           <option value="">Select a category</option>
                           {Object.entries(budget.categoryAllocations).map(([category, allocation]) => {
@@ -2331,7 +2236,7 @@ const BudgetPage: React.FC = () => {
                           }}
                           placeholder="Enter category (create categories first)"
                       className="w-full px-4 py-3 glass-input rounded-xl"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     />
                       )}
                       {budget?.lockedCategories?.includes(newExpense.category) && (
@@ -2407,7 +2312,7 @@ const BudgetPage: React.FC = () => {
                       }
                       placeholder="Enter amount"
                       className="w-full px-4 py-3 glass-input rounded-xl"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     />
                   </div>
 
@@ -2421,7 +2326,7 @@ const BudgetPage: React.FC = () => {
                       }
                       placeholder="What did you spend on?"
                       className="w-full px-4 py-3 glass-input rounded-xl"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     />
                   </div>
 
@@ -2434,7 +2339,7 @@ const BudgetPage: React.FC = () => {
                         setNewExpense((prev) => ({ ...prev, date: event.target.value }))
                       }
                       className="w-full px-4 py-3 glass-input rounded-xl"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     />
                   </div>
 
@@ -2446,7 +2351,7 @@ const BudgetPage: React.FC = () => {
                         setNewExpense((prev) => ({ ...prev, paidById: event.target.value }))
                       }
                       className="w-full px-4 py-3 glass-input rounded-xl"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     >
                       <option value="">Select member</option>
                       {group?.members.map((member) => (
@@ -2472,13 +2377,18 @@ const BudgetPage: React.FC = () => {
                               className="h-4 w-4 rounded border-white/30 bg-transparent"
                               checked={checked}
                               onChange={() => handleSplitBetweenToggle(member.uid)}
-                              disabled={!user || isSavingExpense}
+                              disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                             />
                             <span>{member.name}</span>
                           </label>
                         );
                       })}
                     </div>
+                    {newExpense.splitBetween.length === 0 && newExpense.paidById && (
+                      <p className="text-xs text-secondary mt-2">
+                        💡 No one selected? The payer will be auto-selected for a personal expense.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -2490,7 +2400,7 @@ const BudgetPage: React.FC = () => {
                       accept="image/*"
                       onChange={handleReceiptChange}
                       className="w-full text-sm text-secondary"
-                      disabled={!user || isSavingExpense}
+                      disabled={!user || isSavingExpense || !currentUserHasBudgetShare}
                     />
                     {receiptPreviewUrl && (
                       <div className="mt-3">
@@ -2510,10 +2420,12 @@ const BudgetPage: React.FC = () => {
                       !user || 
                       isSavingExpense || 
                       uploadingReceipt ||
+                      !currentUserHasBudgetShare ||
                       (budget?.lockedCategories?.includes(newExpense.category) && !isLeader)
                     }
                   >
                     {isSavingExpense ? 'Saving...' : uploadingReceipt ? 'Uploading receipt...' : 
+                     !currentUserHasBudgetShare ? 'Budget Share Required' :
                      budget?.lockedCategories?.includes(newExpense.category) && !isLeader
                        ? 'Category Locked' : 'Add Expense'}
                   </button>
@@ -2685,6 +2597,27 @@ const BudgetPage: React.FC = () => {
                         {(totalAssigned - totalBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </div>
                     )}
+                    
+                    {/* Split Equally Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const memberCount = memberBudgetShares.length;
+                        if (memberCount === 0) return;
+                        const equalShare = Math.floor((totalBudget / memberCount) * 100) / 100;
+                        const remainder = totalBudget - (equalShare * memberCount);
+                        const newShares: Record<string, string> = {};
+                        memberBudgetShares.forEach((member, index) => {
+                          newShares[member.userId] = index === 0 
+                            ? (equalShare + remainder).toFixed(2)
+                            : equalShare.toFixed(2);
+                        });
+                        setEditingBudgetShares(newShares);
+                      }}
+                      className="mt-3 w-full text-sm premium-button-secondary py-2"
+                    >
+                      Split Budget Equally Among Members
+                    </button>
                   </div>
                 );
               })()}
@@ -2967,15 +2900,19 @@ const BudgetPage: React.FC = () => {
                             placeholder="Brief description"
                           />
                         </div>
-                        <div className="col-span-1 flex items-end">
+                        <div className="col-span-1 flex items-end justify-center">
                           <button
                             onClick={() => {
+                              if (editingCategories.length === 1) {
+                                showToast('Cannot delete the last category', 'error');
+                                return;
+                              }
                               setEditingCategories(editingCategories.filter((_, i) => i !== index));
                             }}
-                            className="p-2 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors"
-                            title="Remove category"
+                            className="p-2 bg-red-400/10 text-red-400 hover:text-red-300 hover:bg-red-400/20 rounded-lg transition-colors border border-red-400/30"
+                            title="Delete category"
                           >
-                            <X className="h-4 w-4" />
+                            <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
       </div>
@@ -3012,35 +2949,49 @@ const BudgetPage: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-secondary">Total Allocated:</span>
                   <span className={`text-lg font-bold ${
-                    editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) === totalBudget
+                    editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) <= totalBudget
                       ? 'text-green-400'
-                      : editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) > totalBudget
-                      ? 'text-red-400'
-                      : 'text-orange-400'
+                      : 'text-red-400'
                   }`}>
                     ₹{editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm font-medium text-secondary">Remaining:</span>
+                  <span className="text-sm font-medium text-secondary">Unallocated:</span>
                   <span className={`text-lg font-bold ${
-                    totalBudget - editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) === 0
-                      ? 'text-green-400'
-                      : 'text-secondary'
+                    totalBudget - editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) >= 0
+                      ? 'text-blue-400'
+                      : 'text-red-400'
                   }`}>
                     ₹{(totalBudget - editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                 </div>
-                {editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) !== totalBudget && (
-                  <div className={`mt-3 p-2 rounded text-xs ${
-                    editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) > totalBudget
-                      ? 'bg-red-400/10 text-red-400 border border-red-400/30'
-                      : 'bg-orange-400/10 text-orange-400 border border-orange-400/30'
-                  }`}>
-                    {editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) > totalBudget
-                      ? `⚠️ Total exceeds budget by ₹${(editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) - totalBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                      : `⚠️ Total is ₹${(totalBudget - editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })} less than total budget`}
+                {editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) > totalBudget && (
+                  <div className="mt-3 p-2 rounded text-xs bg-red-400/10 text-red-400 border border-red-400/30">
+                    ⚠️ Total exceeds budget by ₹{(editingCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0) - totalBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </div>
+                )}
+                
+                {/* Split Equally Button */}
+                {editingCategories.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const validCategories = editingCategories.filter(c => c.name.trim());
+                      if (validCategories.length === 0) return;
+                      const equalShare = Math.floor((totalBudget / validCategories.length) * 100) / 100;
+                      const remainder = totalBudget - (equalShare * validCategories.length);
+                      setEditingCategories(editingCategories.map((cat, index) => ({
+                        ...cat,
+                        budget: index === 0 
+                          ? (equalShare + remainder).toFixed(2) 
+                          : equalShare.toFixed(2),
+                      })));
+                    }}
+                    className="mt-3 w-full text-sm premium-button-secondary py-2"
+                  >
+                    Split Budget Equally
+                  </button>
                 )}
               </div>
 
@@ -3076,11 +3027,10 @@ const BudgetPage: React.FC = () => {
 
                     // Recalculate total with only valid categories
                     const validCategoryTotal = validCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0);
-                    const validDifference = Math.abs(validCategoryTotal - totalBudget);
                     
-                    // Allow small floating point differences (less than 0.01)
-                    if (validDifference > 0.01) {
-                      showToast(`Category budgets (₹${validCategoryTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) must equal the total budget (₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). Please adjust the amounts.`, 'error');
+                    // Allow totals <= budget (remaining is unallocated)
+                    if (validCategoryTotal > totalBudget + 0.01) {
+                      showToast(`Category budgets (₹${validCategoryTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) exceed the total budget (₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). Please reduce the amounts.`, 'error');
                       return;
                     }
 
@@ -3142,7 +3092,7 @@ const BudgetPage: React.FC = () => {
                       const validCategories = editingCategories.filter(c => c.name.trim());
                       if (validCategories.length === 0) return true;
                       const validTotal = validCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0);
-                      return Math.abs(validTotal - totalBudget) > 0.01;
+                      return validTotal > totalBudget + 0.01; // Only block if exceeds budget
                     })()
                   }
                   className="flex-1 premium-button-primary disabled:opacity-50 disabled:cursor-not-allowed"
@@ -3153,9 +3103,8 @@ const BudgetPage: React.FC = () => {
                           const validCategories = editingCategories.filter(c => c.name.trim());
                           if (validCategories.length === 0) return 'Fill in category names';
                           const validTotal = validCategories.reduce((sum, c) => sum + (parseFloat(c.budget) || 0), 0);
-                          const diff = Math.abs(validTotal - totalBudget);
-                          return diff > 0.01
-                            ? `Category total (₹${validTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) must equal total budget (₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`
+                          return validTotal > totalBudget + 0.01
+                            ? `Category total exceeds budget - reduce by ₹${(validTotal - totalBudget).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
                             : 'Save categories';
                         })()
                   }
@@ -3168,91 +3117,6 @@ const BudgetPage: React.FC = () => {
                   ) : (
                     'Save Categories'
                   )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* AI Sync Confirmation */}
-        {showAiSyncConfirm && aiBudget && aiBudget.categories && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="glass-card p-6 max-w-md w-full mx-4 rounded-2xl border border-white/20">
-              <div className="flex items-center gap-3 mb-4">
-                <Brain className="h-6 w-6 text-blue-400" />
-                <h3 className="text-xl font-bold text-primary">Sync from AI Plan</h3>
-              </div>
-              <p className="text-secondary mb-4">
-                This will replace your current category budgets with the AI-suggested allocations from your finalized plan.
-              </p>
-              <div className="mb-4 p-3 bg-blue-400/10 border border-blue-400/30 rounded-lg">
-                <p className="text-xs text-secondary mb-2">AI Suggested Categories:</p>
-                <div className="space-y-1">
-                  {Object.entries(aiBudget.categories).slice(0, 5).map(([cat, alloc]) => (
-                    <div key={cat} className="flex items-center justify-between text-sm">
-                      <span className="text-primary">{cat}</span>
-                      <span className="text-blue-300">₹{(alloc.budgeted || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  ))}
-                  {Object.keys(aiBudget.categories).length > 5 && (
-                    <p className="text-xs text-secondary mt-1">+ {Object.keys(aiBudget.categories).length - 5} more categories</p>
-                  )}
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowAiSyncConfirm(false)}
-                  className="flex-1 premium-button-secondary"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={async () => {
-                    if (!groupId || !user || !aiBudget || !budget) return;
-                    setSavingCategories(true);
-                    
-                    // Optimistic update: immediately update budget state
-                    const categoryAllocations: Record<string, { budgeted: number; color: string }> = {};
-                    Object.entries(aiBudget.categories).forEach(([cat, alloc], index) => {
-                      categoryAllocations[cat] = {
-                        budgeted: alloc.budgeted || 0,
-                        color: alloc.color || colorPalette[index % colorPalette.length],
-                      };
-                    });
-                    
-                    const previousBudget = budget;
-                    setBudget({
-                      ...budget,
-                      categoryAllocations,
-                      totalBudget: aiBudget.total,
-                    });
-                    
-                    try {
-                      await upsertGroupBudget({
-                        groupId,
-                        totalBudget: aiBudget.total,
-                        createdBy: user.uid,
-                        categoryAllocations,
-                        lockedCategories: budget.lockedCategories || [],
-                      });
-
-                      showToast('Category budgets synced from AI plan successfully!', 'success');
-                      setShowAiSyncConfirm(false);
-                      // Budget will also update via subscription for consistency
-                    } catch (error: any) {
-                      console.error('Error syncing AI categories:', error);
-                      // Revert optimistic update on error
-                      if (previousBudget) {
-                        setBudget(previousBudget);
-                      }
-                      showToast(error.message || 'Failed to sync categories.', 'error');
-                    } finally {
-                      setSavingCategories(false);
-                    }
-                  }}
-                  className="flex-1 premium-button-primary"
-                >
-                  Sync Categories
                 </button>
               </div>
             </div>
@@ -3372,11 +3236,10 @@ const BudgetPage: React.FC = () => {
                     const oldCategoryBudget = currentAllocations[editingSingleCategory.category]?.budgeted || 0;
                     const newTotal = currentTotal - oldCategoryBudget + newBudget;
 
-                    // Check if new total matches total budget
-                    const difference = Math.abs(newTotal - totalBudget);
-                    if (difference > 0.01) {
+                    // Check if new total exceeds total budget (allow less than or equal)
+                    if (newTotal > totalBudget + 0.01) {
                       showToast(
-                        `Updating this category would make total ₹${newTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}, but total budget is ₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}. Please adjust other categories first.`,
+                        `Total category allocation (₹${newTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) would exceed the total budget (₹${totalBudget.toLocaleString('en-IN', { minimumFractionDigits: 2 })}). Please reduce this amount.`,
                         'error'
                       );
                       return;
@@ -3441,6 +3304,104 @@ const BudgetPage: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Set Budget Modal */}
+        {showSetBudgetModal && isLeader && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="glass-card p-6 max-w-md w-full">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-400/20 flex items-center justify-center">
+                    <DollarSign className="h-5 w-5 text-blue-400" />
+                  </div>
+                  <h3 className="text-xl font-bold text-primary">Set Total Budget</h3>
+                </div>
+                <button
+                  onClick={() => setShowSetBudgetModal(false)}
+                  className="text-secondary hover:text-primary transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-secondary mb-2">
+                  Total Trip Budget (₹)
+                </label>
+                <input
+                  type="number"
+                  value={newTotalBudget}
+                  onChange={(e) => setNewTotalBudget(e.target.value)}
+                  placeholder="Enter total budget"
+                  className="w-full px-4 py-3 glass-input rounded-xl text-lg"
+                  min="0"
+                  step="100"
+                />
+                <p className="text-xs text-secondary mt-2">
+                  This is the maximum budget for your entire trip. You'll allocate this across categories next.
+                </p>
+              </div>
+
+              {budget?.categoryAllocations && Object.keys(budget.categoryAllocations).length > 0 && (
+                <div className="mb-6 p-3 bg-orange-400/10 border border-orange-400/30 rounded-lg">
+                  <p className="text-xs text-orange-400">
+                    ⚠️ Changing the total budget will require you to re-adjust your category allocations.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowSetBudgetModal(false)}
+                  className="flex-1 premium-button-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const budgetAmount = parseFloat(newTotalBudget);
+                    if (isNaN(budgetAmount) || budgetAmount <= 0) {
+                      showToast('Please enter a valid budget amount.', 'error');
+                      return;
+                    }
+
+                    try {
+                      const savedBudget = await upsertGroupBudget({
+                        groupId: groupId!,
+                        totalBudget: budgetAmount,
+                        createdBy: user!.uid,
+                        categoryAllocations: budget?.categoryAllocations || {},
+                        lockedCategories: budget?.lockedCategories || [],
+                      });
+                      setBudget(savedBudget);
+                      showToast('Budget set successfully!', 'success');
+                      setShowSetBudgetModal(false);
+                    } catch (error: any) {
+                      console.error('Error setting budget:', error);
+                      showToast(error?.message || 'Failed to set budget. Please try again.', 'error');
+                    }
+                  }}
+                  disabled={!newTotalBudget || parseFloat(newTotalBudget) <= 0}
+                  className="flex-1 premium-button-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save Budget
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Category Template Modal */}
+        <CategoryTemplateModal
+          isOpen={showTemplateModal}
+          onClose={() => setShowTemplateModal(false)}
+          totalBudget={totalBudget}
+          onApplyTemplate={(categories) => {
+            setEditingCategories(categories);
+            setShowTemplateModal(false);
+            setShowCategoryManager(true);
+          }}
+        />
 
         {/* Toast Notifications */}
         <div className="fixed bottom-4 right-4 z-50 space-y-2">

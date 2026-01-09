@@ -145,6 +145,7 @@ export function subscribeGroupPolls(
   cb: (polls: GroupPoll[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setup = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -152,12 +153,24 @@ export function subscribeGroupPolls(
     cb(initial);
 
     channel = supabase
-      .channel(`group-polls-${groupId}`)
+      .channel(`group-polls-${groupId}-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'group_polls', filter: `group_id=eq.${groupId}` }, async () => {
         const latest = await listPolls(groupId);
         cb(latest);
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`📡 Polls subscription status for ${groupId}:`, status);
+      });
+    
+    // Polling fallback every 3 seconds for responsive voting
+    pollInterval = setInterval(async () => {
+      try {
+        const freshPolls = await listPolls(groupId);
+        cb(freshPolls);
+      } catch (err) {
+        console.error('Polls polling error:', err);
+      }
+    }, 3000);
   };
 
   setup();
@@ -166,5 +179,6 @@ export function subscribeGroupPolls(
     if (channel) {
       getAuthenticatedSupabaseClient().then((s) => s.removeChannel(channel as RealtimeChannel));
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
