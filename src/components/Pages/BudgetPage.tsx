@@ -1439,10 +1439,10 @@ const BudgetPage: React.FC = () => {
                             </div>
                             <div className="text-right text-xs text-secondary">
                               <span className="font-medium text-primary">Spent</span>{' '}
-                              <span>
-                                ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
-                                / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </span>
+                                <span>
+                                  ₹{category.spent.toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                                  / ₹{category.budgeted.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </span>
                             </div>
                           </div>
                           <div className="w-full bg-white/10 rounded-full h-3">

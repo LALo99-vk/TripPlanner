@@ -12,7 +12,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { auth } from '../../config/firebase';
-import { getUserGroups, Group } from '../../services/groupRepository';
+import { getUserGroups, subscribeUserGroups, Group } from '../../services/groupRepository';
 import { 
   sendMessage, 
   subscribeGroupChat,
@@ -50,13 +50,14 @@ const ChatSidebar: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Load user's groups
+  // Load and subscribe to user's groups (real-time)
   useEffect(() => {
     if (!user) {
       setGroups([]);
       return;
     }
 
+    // Initial load
     const loadGroups = async () => {
       try {
         const userGroups = await getUserGroups(user.uid);
@@ -70,8 +71,19 @@ const ChatSidebar: React.FC = () => {
         console.error('Error loading groups:', error);
       }
     };
-
     loadGroups();
+
+    // Subscribe to real-time group updates
+    const unsubscribe = subscribeUserGroups(user.uid, (updatedGroups) => {
+      setGroups(updatedGroups);
+      
+      // Auto-select first group if none selected and we have groups now
+      if (updatedGroups.length > 0 && !selectedGroupId) {
+        setSelectedGroupId(updatedGroups[0].id);
+      }
+    });
+
+    return () => unsubscribe();
   }, [user]);
 
   // Subscribe to selected group's messages with polling fallback

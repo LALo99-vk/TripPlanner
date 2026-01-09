@@ -126,14 +126,16 @@ export async function getLatestUserPlan(userId: string): Promise<SavedPlanRecord
  * Subscribe to the latest plan for a user (real-time)
  */
 export function subscribeLatestUserPlan(userId: string, cb: (rec: SavedPlanRecord | null) => void): () => void {
+  let pollInterval: NodeJS.Timeout | null = null;
+
   const channel = getAuthenticatedSupabaseClient().then(async (supabase) => {
     // First, get the current latest plan
     const latest = await getLatestUserPlan(userId);
     cb(latest);
 
     // Then subscribe to changes
-    return supabase
-      .channel(`user-${userId}-latest-plan`)
+    const ch = supabase
+      .channel(`user-${userId}-latest-plan-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -149,6 +151,18 @@ export function subscribeLatestUserPlan(userId: string, cb: (rec: SavedPlanRecor
         }
       )
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await getLatestUserPlan(userId);
+        cb(updated);
+      } catch (err) {
+        console.error('Latest plan polling error:', err);
+      }
+    }, 5000);
+
+    return ch;
   });
 
   // Return unsubscribe function
@@ -160,6 +174,7 @@ export function subscribeLatestUserPlan(userId: string, cb: (rec: SavedPlanRecor
         });
       }
     });
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -193,14 +208,16 @@ export async function listUserPlans(userId: string): Promise<SavedPlanRecord[]> 
  * Subscribe to all plans for a user (real-time)
  */
 export function subscribeUserPlans(userId: string, cb: (recs: SavedPlanRecord[]) => void): () => void {
+  let pollInterval: NodeJS.Timeout | null = null;
+
   const channel = getAuthenticatedSupabaseClient().then(async (supabase) => {
     // First, get current plans
     const plans = await listUserPlans(userId);
     cb(plans);
 
     // Then subscribe to changes
-    return supabase
-      .channel(`user-${userId}-plans`)
+    const ch = supabase
+      .channel(`user-${userId}-plans-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -216,6 +233,18 @@ export function subscribeUserPlans(userId: string, cb: (recs: SavedPlanRecord[])
         }
       )
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await listUserPlans(userId);
+        cb(updated);
+      } catch (err) {
+        console.error('User plans polling error:', err);
+      }
+    }, 5000);
+
+    return ch;
   });
 
   // Return unsubscribe function
@@ -227,6 +256,7 @@ export function subscribeUserPlans(userId: string, cb: (recs: SavedPlanRecord[])
         });
       }
     });
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

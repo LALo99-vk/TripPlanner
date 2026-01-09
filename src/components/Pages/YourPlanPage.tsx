@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { planStore } from '../../services/planStore';
 import { AiTripPlanData } from '../../services/api';
-import { ChevronDown, ChevronRight, Clock, Download, Link2, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, Download, Link2, Save, Star, CheckCircle, Sparkles, User } from 'lucide-react';
 import { useWeatherForecast } from '../../services/weatherService';
 import { generateWeatherRecommendation } from '../../services/recommendationService';
 import WeatherCard from '../Weather/WeatherCard';
@@ -127,13 +127,77 @@ const YourPlanPage: React.FC = () => {
     );
   }
 
+  // Check if this is an advisor plan
+  const advisorInfo = (plan as any).advisorInfo;
+  const isAdvisorPlan = !!advisorInfo;
+
   return (
     <div className="min-h-screen p-3 sm:p-6 pb-safe">
       <div className="content-container space-y-4 sm:space-y-6">
+        {/* Advisor Plan Banner */}
+        {isAdvisorPlan && (
+          <div className="glass-card p-4 sm:p-6 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/20">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-yellow-500/20 rounded-full flex items-center justify-center">
+                  <Sparkles className="h-6 w-6 text-yellow-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-primary">
+                      {advisorInfo.planType === 'advisor_created' ? 'Local Advisor Plan' : 'AI Plan Enhanced by Local'}
+                    </h3>
+                    <CheckCircle className="h-5 w-5 text-green-400" />
+                  </div>
+                  <p className="text-sm text-secondary">
+                    Created by <strong>{advisorInfo.advisorName}</strong> • Local Expert in {advisorInfo.advisorCity}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 text-yellow-400">
+                  <Star className="h-5 w-5 fill-current" />
+                  <span className="font-bold">{advisorInfo.advisorRating}</span>
+                </div>
+                <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded-full">
+                  Verified Local
+                </span>
+              </div>
+            </div>
+            {/* What was added */}
+            <div className="mt-4 pt-4 border-t border-yellow-500/20 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="text-center">
+                <div className="text-lg font-bold text-primary">{advisorInfo.localInsightsAdded || 0}</div>
+                <div className="text-xs text-secondary">Local Insights</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-bold text-primary">{advisorInfo.hiddenGemsAdded || 0}</div>
+                <div className="text-xs text-secondary">Hidden Gems</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-bold text-primary">{plan.days.length * 3}</div>
+                <div className="text-xs text-secondary">Local Tips</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-bold text-primary">100%</div>
+                <div className="text-xs text-secondary">Authentic</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="glass-card p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
-              <div className="text-xl sm:text-2xl font-bold text-primary mb-1">Your Plan</div>
+              <div className="text-xl sm:text-2xl font-bold text-primary mb-1 flex items-center gap-2">
+                Your Plan
+                {isAdvisorPlan && (
+                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 text-xs rounded-full flex items-center gap-1">
+                    <User className="h-3 w-3" />
+                    Local Expert
+                  </span>
+                )}
+              </div>
               <div className="text-sm sm:text-base text-secondary">{plan.overview.from} → {plan.overview.to} • {plan.overview.durationDays} Days • ₹{plan.overview.budgetINR.toLocaleString('en-IN')}</div>
               <div className="text-sm sm:text-base text-secondary mt-1">Travellers: {plan.overview.travelers} • Interests: {plan.overview.interests.join(', ')}</div>
             </div>

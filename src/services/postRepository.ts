@@ -73,6 +73,7 @@ export function subscribeUserPosts(
   callback: (posts: PostRecord[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -83,7 +84,7 @@ export function subscribeUserPosts(
 
     // Subscribe to changes
     channel = supabase
-      .channel(`user-posts-${userId}`)
+      .channel(`user-posts-${userId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -99,6 +100,16 @@ export function subscribeUserPosts(
         }
       )
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updatedPosts = await getUserPosts(userId);
+        callback(updatedPosts);
+      } catch (err) {
+        console.error('User posts polling error:', err);
+      }
+    }, 5000);
   };
 
   setupSubscription();
@@ -109,6 +120,7 @@ export function subscribeUserPosts(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -483,6 +495,7 @@ export function subscribePostLikes(
   callback: (likesCount: number) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -500,7 +513,7 @@ export function subscribePostLikes(
 
     // Subscribe to likes changes
     channel = supabase
-      .channel(`post-likes-${postId}`)
+      .channel(`post-likes-${postId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -522,6 +535,23 @@ export function subscribePostLikes(
         }
       )
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const { data: updatedPost } = await supabase
+          .from('posts')
+          .select('likes_count')
+          .eq('id', postId)
+          .single();
+
+        if (updatedPost) {
+          callback((updatedPost.likes_count || 0) as number);
+        }
+      } catch (err) {
+        console.error('Post likes polling error:', err);
+      }
+    }, 5000);
   };
 
   setupSubscription();
@@ -532,6 +562,7 @@ export function subscribePostLikes(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -543,6 +574,7 @@ export function subscribePostComments(
   callback: (comments: PostComment[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -553,7 +585,7 @@ export function subscribePostComments(
 
     // Subscribe to comments changes
     channel = supabase
-      .channel(`post-comments-${postId}`)
+      .channel(`post-comments-${postId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -568,6 +600,16 @@ export function subscribePostComments(
         }
       )
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updatedComments = await getPostComments(postId);
+        callback(updatedComments);
+      } catch (err) {
+        console.error('Post comments polling error:', err);
+      }
+    }, 5000);
   };
 
   setupSubscription();
@@ -578,6 +620,7 @@ export function subscribePostComments(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

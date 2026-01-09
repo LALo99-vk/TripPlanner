@@ -335,6 +335,7 @@ export function subscribeToFinalizedPlan(
   callback: (plan: FinalizedPlan | null) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -345,7 +346,7 @@ export function subscribeToFinalizedPlan(
 
     // Subscribe to changes
     channel = supabase
-      .channel(`finalized-plan-${groupId}`)
+      .channel(`finalized-plan-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -360,6 +361,16 @@ export function subscribeToFinalizedPlan(
         }
       )
       .subscribe();
+
+    // Polling fallback every 3 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updatedPlan = await getFinalizedPlan(groupId);
+        callback(updatedPlan);
+      } catch (err) {
+        console.error('Finalized plan polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -370,6 +381,7 @@ export function subscribeToFinalizedPlan(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -381,17 +393,20 @@ export function subscribeToApprovalStatus(
   callback: (status: ApprovalStatus) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
+  let lastStatus: string = '';
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
 
     // Get initial status
     const initialStatus = await getApprovalStatus(groupId);
+    lastStatus = JSON.stringify(initialStatus);
     callback(initialStatus);
 
     // Subscribe to changes
     channel = supabase
-      .channel(`plan-approvals-${groupId}`)
+      .channel(`plan-approvals-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -418,7 +433,24 @@ export function subscribeToApprovalStatus(
           callback(updatedStatus);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`📡 Plan approval subscription status:`, status);
+      });
+
+    // Polling fallback every 3 seconds (in case real-time doesn't work)
+    pollInterval = setInterval(async () => {
+      try {
+        const freshStatus = await getApprovalStatus(groupId);
+        const freshStatusStr = JSON.stringify(freshStatus);
+        // Only callback if status actually changed
+        if (freshStatusStr !== lastStatus) {
+          lastStatus = freshStatusStr;
+          callback(freshStatus);
+        }
+      } catch (err) {
+        console.error('Approval status polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -428,6 +460,9 @@ export function subscribeToApprovalStatus(
       getAuthenticatedSupabaseClient().then((supabase) => {
         supabase.removeChannel(channel as RealtimeChannel);
       });
+    }
+    if (pollInterval) {
+      clearInterval(pollInterval);
     }
   };
 }

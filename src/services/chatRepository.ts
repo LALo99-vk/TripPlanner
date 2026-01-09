@@ -288,40 +288,40 @@ export function subscribeGroupChat(
 
     channel
       .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-        (payload: any) => {
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+      (payload: any) => {
           console.log('📨 New message received:', payload.new?.id);
-          const msg = mapMessageData(payload.new);
+        const msg = mapMessageData(payload.new);
           // Check if message already exists (avoid duplicates from optimistic update)
           if (!messagesSnapshot.some(m => m.id === msg.id)) {
-            messagesSnapshot = [...messagesSnapshot, msg];
-            callback(messagesSnapshot);
-          }
+        messagesSnapshot = [...messagesSnapshot, msg];
+        callback(messagesSnapshot);
+      }
         }
       )
       .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-        (payload: any) => {
-          const updated = mapMessageData(payload.new);
-          const idx = messagesSnapshot.findIndex((m) => m.id === updated.id);
-          if (idx !== -1) {
-            const next = [...messagesSnapshot];
-            next[idx] = updated;
-            messagesSnapshot = next;
-            callback(messagesSnapshot);
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
-        (payload: any) => {
-          const id = payload.old?.id as string;
-          messagesSnapshot = messagesSnapshot.filter((m) => m.id !== id);
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+      (payload: any) => {
+        const updated = mapMessageData(payload.new);
+        const idx = messagesSnapshot.findIndex((m) => m.id === updated.id);
+        if (idx !== -1) {
+          const next = [...messagesSnapshot];
+          next[idx] = updated;
+          messagesSnapshot = next;
           callback(messagesSnapshot);
         }
+      }
+      )
+      .on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'group_chat_messages', filter: `group_id=eq.${groupId}` },
+      (payload: any) => {
+        const id = payload.old?.id as string;
+        messagesSnapshot = messagesSnapshot.filter((m) => m.id !== id);
+        callback(messagesSnapshot);
+      }
       )
       .subscribe((status) => {
         console.log(`📡 Chat subscription status for ${groupId}:`, status);
@@ -333,6 +333,22 @@ export function subscribeGroupChat(
 
   setupSubscription();
 
+  // Polling fallback every 3 seconds
+  const pollInterval = setInterval(async () => {
+    try {
+      const freshMessages = await getGroupMessages(groupId);
+      // Only update if there are new messages
+      if (freshMessages.length !== messagesSnapshot.length || 
+          (freshMessages.length > 0 && messagesSnapshot.length > 0 && 
+           freshMessages[freshMessages.length - 1]?.id !== messagesSnapshot[messagesSnapshot.length - 1]?.id)) {
+        messagesSnapshot = freshMessages;
+        callback(messagesSnapshot);
+      }
+    } catch (err) {
+      console.error('Chat polling error:', err);
+    }
+  }, 3000);
+
   // Return unsubscribe function
   return () => {
     if (channel) {
@@ -341,6 +357,7 @@ export function subscribeGroupChat(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    clearInterval(pollInterval);
   };
 }
 

@@ -1,12 +1,16 @@
-import React, { useRef, useState } from 'react';
-import { X, Plus } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Plus, Sparkles, Bot, Users, ArrowRight, CheckCircle, Loader2 } from 'lucide-react';
 import { INDIAN_CITIES, TRAVEL_INTERESTS } from '../../utils/constants';
 import { TravelInterest } from '../../types';
-import { apiService } from '../../services/api';
+import { apiService, AiTripPlanData } from '../../services/api';
 import { planStore } from '../../services/planStore';
 import { auth } from '../../config/firebase';
 import { saveUserPlan } from '../../services/planRepository';
 import { useAuth } from '../../hooks/useAuth';
+import AdvisorSelectionPage from './AdvisorSelectionPage';
+import AdvisorPlanRequestPage from './AdvisorPlanRequestPage';
+import AdvisorPlanViewPage from './AdvisorPlanViewPage';
+import { TravelAdvisor } from '../../services/advisorRepository';
 
 interface TripStyle {
   id: string;
@@ -15,9 +19,17 @@ interface TripStyle {
   description: string;
 }
 
+type PlanningMode = 'choice' | 'ai' | 'advisor_select' | 'advisor_request' | 'advisor_plan_view';
 
 const TripPlannerPage: React.FC = () => {
   const { user } = useAuth();
+  
+  // Planning mode state
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('choice');
+  const [selectedAdvisor, setSelectedAdvisor] = useState<TravelAdvisor | null>(null);
+  const [advisorRequestId, setAdvisorRequestId] = useState<string | null>(null);
+  const [advisorPlanType, setAdvisorPlanType] = useState<'new_plan' | 'enhance_plan'>('new_plan');
+  
   const [formData, setFormData] = useState({
     from: 'Bangalore',
     to: 'Chennai',
@@ -50,7 +62,50 @@ const TripPlannerPage: React.FC = () => {
   const [customDestinationInput, setCustomDestinationInput] = useState('');
   const [customActivityInput, setCustomActivityInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingDestination, setGeneratingDestination] = useState('');
+  const [generationStartTime, setGenerationStartTime] = useState(0);
   const formRef = useRef<HTMLDivElement | null>(null);
+
+  // Force re-render for elapsed time display
+  const [, setTick] = useState(0);
+
+  // Check and restore generation state on mount
+  useEffect(() => {
+    const state = planStore.getGenerationState();
+    if (state.isGenerating) {
+      setIsGenerating(true);
+      setGeneratingDestination(state.destination);
+      setGenerationStartTime(state.startTime);
+      // If generation is in progress, switch to AI mode
+      setPlanningMode('ai');
+    }
+
+    // Subscribe to planStore changes
+    const unsub = planStore.subscribe(() => {
+      const newState = planStore.getGenerationState();
+      setIsGenerating(newState.isGenerating);
+      setGeneratingDestination(newState.destination);
+      setGenerationStartTime(newState.startTime);
+      
+      // If plan is ready and we were generating, show success
+      if (!newState.isGenerating && planStore.getPlan()) {
+        // Plan is ready
+      }
+    });
+
+    return unsub;
+  }, []);
+
+  // Update elapsed time display every second when generating
+  useEffect(() => {
+    if (!isGenerating || !generationStartTime) return;
+    
+    const interval = setInterval(() => {
+      setTick(t => t + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isGenerating, generationStartTime]);
 
   const tripStyles: TripStyle[] = [
     { id: 'relaxing', label: 'Relaxing', icon: '🏖️', description: 'Beaches, Spas' },
@@ -114,7 +169,10 @@ const TripPlannerPage: React.FC = () => {
       return;
     }
 
+    // Set generating state both locally and in planStore (persisted)
     setIsGenerating(true);
+    setGeneratingDestination(toCity);
+    planStore.setGenerating(true, toCity);
     
     try {
       const response: any = await apiService.generateTripPlan({
@@ -149,12 +207,14 @@ const TripPlannerPage: React.FC = () => {
         const seasonalInfo = response.seasonalValidation;
         const warningMessage = `${response.message}\n\n${seasonalInfo.warnings.join('\n')}\n\n${seasonalInfo.suggestions.join('\n')}`;
         alert(warningMessage);
+        planStore.setGenerating(false, '');
         setIsGenerating(false);
         return;
       }
 
       const ai = response.data;
-      planStore.setPlan(ai);
+      planStore.setPlan(ai); // This also clears generating state
+      
       // Persist to Supabase if user is logged in
       const user = auth.currentUser;
       if (user) {
@@ -177,23 +237,149 @@ const TripPlannerPage: React.FC = () => {
       window.dispatchEvent(evt as any);
     } catch (error) {
       console.error('Failed to generate itinerary:', error);
+      planStore.setGenerationError('Failed to generate itinerary. Please try again.');
       alert('Failed to generate itinerary. Please try again.');
     } finally {
       setIsGenerating(false);
+      planStore.setGenerating(false, '');
     }
   };
 
 
+  // Handle advisor selection
+  const handleAdvisorSelect = (advisor: TravelAdvisor) => {
+    setSelectedAdvisor(advisor);
+    setPlanningMode('advisor_request');
+  };
+
+  // Handle request submitted
+  const handleRequestSubmitted = (requestId: string) => {
+    setAdvisorRequestId(requestId);
+    setPlanningMode('advisor_plan_view');
+  };
+
+  // Handle plan accepted from advisor
+  const handleAdvisorPlanAccepted = async (plan: AiTripPlanData) => {
+    // Save the plan
+    planStore.setPlan(plan);
+    
+    // Save to database if user is logged in
+    if (user) {
+      try {
+        await saveUserPlan({
+          userId: user.uid,
+          plan,
+          userBudget: plan.overview.budgetINR,
+          optimizedBudget: plan.totals?.totalCostINR,
+          categoryBudgets: plan.totals?.breakdown,
+        });
+      } catch (e) {
+        console.error('Failed to save advisor plan to Supabase:', e);
+      }
+    }
+    
+    // Navigate to Your Plan page
+    const evt = new CustomEvent('navigate', { detail: { page: 'yourplan' } });
+    window.dispatchEvent(evt as any);
+  };
+
+  // Render advisor selection page
+  if (planningMode === 'advisor_select') {
+    return (
+      <AdvisorSelectionPage
+        destination={formData.toCustom || formData.to}
+        onSelectAdvisor={handleAdvisorSelect}
+        onBack={() => setPlanningMode('choice')}
+        mode={advisorPlanType}
+      />
+    );
+  }
+
+  // Render advisor request page
+  if (planningMode === 'advisor_request' && selectedAdvisor) {
+    return (
+      <AdvisorPlanRequestPage
+        advisor={selectedAdvisor}
+        mode={advisorPlanType}
+        existingPlan={advisorPlanType === 'enhance_plan' ? planStore.getPlan() || undefined : undefined}
+        onBack={() => setPlanningMode('advisor_select')}
+        onRequestSubmitted={handleRequestSubmitted}
+      />
+    );
+  }
+
+  // Render advisor plan view page
+  if (planningMode === 'advisor_plan_view' && selectedAdvisor && advisorRequestId) {
+    return (
+      <AdvisorPlanViewPage
+        advisor={selectedAdvisor}
+        planType={advisorPlanType === 'new_plan' ? 'advisor_created' : 'advisor_enhanced'}
+        requestId={advisorRequestId}
+        originalPlan={advisorPlanType === 'enhance_plan' ? planStore.getPlan() || undefined : undefined}
+        onBack={() => {
+          setAdvisorRequestId(null);
+          setPlanningMode('advisor_select');
+        }}
+        onAcceptPlan={handleAdvisorPlanAccepted}
+      />
+    );
+  }
+
+  // Calculate elapsed time for generating display
+  const getElapsedTime = () => {
+    if (!generationStartTime) return '';
+    const elapsed = Math.floor((Date.now() - generationStartTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  };
+
   return (
     <div className="min-h-screen p-3 sm:p-6 md:p-8 pb-safe">
       <div className="content-container">
+        {/* Generation In Progress Banner - Shows when returning to page while generating */}
+        {isGenerating && (
+          <div className="glass-card p-6 sm:p-8 mb-6 bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30">
+            <div className="flex flex-col items-center text-center">
+              <div className="relative mb-4">
+                <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center">
+                  <Loader2 className="h-10 w-10 text-blue-400 animate-spin" />
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
+                  <CheckCircle className="h-4 w-4 text-white" />
+                </div>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold text-primary mb-2">
+                Generating Your {generatingDestination} Plan...
+              </h2>
+              <p className="text-secondary mb-4">
+                Our AI is crafting a personalized itinerary for you. This usually takes 30-60 seconds.
+              </p>
+              <div className="flex items-center gap-4 text-sm text-secondary">
+                <span className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                  In Progress
+                </span>
+                {generationStartTime > 0 && (
+                  <span>Elapsed: {getElapsedTime()}</span>
+                )}
+              </div>
+              <div className="mt-4 text-xs text-secondary">
+                💡 Tip: Feel free to explore other pages - we'll save your plan when it's ready!
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Non-blocking reminder to sign in - mobile optimized */}
-        {!user && (
+        {!user && !isGenerating && (
           <div className="glass-card p-3 sm:p-4 mb-3 sm:mb-4 text-xs sm:text-sm text-secondary rounded-lg">
             <p className="text-center sm:text-left">Reminder: Sign in with your Google account to save and access your plans across devices. You can still generate plans without signing in.</p>
           </div>
         )}
+
         {/* Header - responsive typography */}
+        {!isGenerating && (
         <div className="text-center mb-6 sm:mb-10">
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-primary mb-2 sm:mb-4">
             Trip Planner
@@ -202,8 +388,130 @@ const TripPlannerPage: React.FC = () => {
             Create the perfect itinerary for your Indian adventure
           </p>
         </div>
+        )}
 
+        {/* Planning Mode Choice - NEW SECTION */}
+        {planningMode === 'choice' && !isGenerating && (
+          <div className="max-w-4xl mx-auto mb-8">
+            <div className="text-center mb-6">
+              <h2 className="text-xl sm:text-2xl font-bold text-primary mb-2">How would you like to plan your trip?</h2>
+              <p className="text-secondary">Choose your planning experience</p>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+              {/* AI Planning Option */}
+              <button
+                onClick={() => setPlanningMode('ai')}
+                className="glass-card p-6 sm:p-8 text-left hover:bg-white/10 transition-all group touch-manipulation"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 bg-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Bot className="h-7 w-7 text-blue-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg sm:text-xl font-bold text-primary mb-2 flex items-center gap-2">
+                      AI-Powered Planning
+                      <ArrowRight className="h-5 w-5 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+                    </h3>
+                    <p className="text-secondary text-sm mb-4">
+                      Get an instant, structured itinerary generated by AI based on your preferences
+                    </p>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span>Instant results</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span>Data-driven recommendations</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                        <span>Free to use</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-white/10">
+                  <span className="premium-button-primary px-4 py-2 rounded-lg text-sm inline-flex items-center gap-2">
+                    Generate AI Plan
+                    <Bot className="h-4 w-4" />
+                  </span>
+                </div>
+              </button>
+
+              {/* Local Advisor Option */}
+              <button
+                onClick={() => {
+                  setAdvisorPlanType('new_plan');
+                  setPlanningMode('advisor_select');
+                }}
+                className="glass-card p-6 sm:p-8 text-left hover:bg-white/10 transition-all group touch-manipulation border-2 border-yellow-500/30"
+              >
+                <div className="absolute -top-3 -right-3 px-3 py-1 bg-yellow-500 text-black text-xs font-bold rounded-full">
+                  NEW ✨
+                </div>
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 bg-yellow-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Users className="h-7 w-7 text-yellow-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg sm:text-xl font-bold text-primary mb-2 flex items-center gap-2">
+                      Local Travel Advisor
+                      <Sparkles className="h-5 w-5 text-yellow-400" />
+                    </h3>
+                    <p className="text-secondary text-sm mb-4">
+                      Get a personalized plan from a verified local expert who knows hidden gems
+                    </p>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-yellow-400" />
+                        <span>Hidden gems & local secrets</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-yellow-400" />
+                        <span>Authentic local experiences</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-secondary">
+                        <CheckCircle className="h-4 w-4 text-yellow-400" />
+                        <span>Updated, real-world tips</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-white/10">
+                  <span className="bg-yellow-500 text-black px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-2">
+                    Find Local Advisor
+                    <Users className="h-4 w-4" />
+                  </span>
+                </div>
+              </button>
+            </div>
+
+            {/* Quick tip */}
+            <div className="mt-6 glass-card p-4 bg-white/5">
+              <div className="flex items-start gap-3">
+                <Sparkles className="h-5 w-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-secondary">
+                    <strong className="text-primary">Pro tip:</strong> Start with AI planning for a quick overview, then enhance it with a local advisor for authentic experiences and hidden gems!
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Planning Form - Only show when in AI mode */}
+        {planningMode === 'ai' && !isGenerating && (
         <div className="max-w-4xl mx-auto">
+          {/* Back to choice button */}
+          <button
+            onClick={() => setPlanningMode('choice')}
+            className="mb-4 flex items-center text-secondary hover:text-primary touch-manipulation"
+          >
+            ← Back to planning options
+          </button>
           {/* Enhanced Planning Form - mobile responsive */}
           <div ref={formRef} className="glass-card p-4 sm:p-6 md:p-8 rounded-lg sm:rounded-xl">
             <h2 className="text-xl sm:text-2xl font-bold text-primary mb-4 sm:mb-6 md:mb-8">
@@ -733,9 +1041,33 @@ const TripPlannerPage: React.FC = () => {
                   Regenerate Plan
                 </button>
               </div>
+
+              {/* Enhance with Local Advisor - after AI generation */}
+              <div className="mt-6 glass-card p-4 bg-yellow-500/10 border border-yellow-500/20">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <Sparkles className="h-6 w-6 text-yellow-400" />
+                    <div>
+                      <p className="font-semibold text-primary">Want authentic local experiences?</p>
+                      <p className="text-sm text-secondary">Enhance your AI plan with insights from a verified local advisor</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setAdvisorPlanType('enhance_plan');
+                      setPlanningMode('advisor_select');
+                    }}
+                    className="bg-yellow-500 text-black px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 touch-manipulation whitespace-nowrap"
+                  >
+                    <Users className="h-4 w-4" />
+                    Find Local Advisor
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

@@ -358,21 +358,21 @@ export async function recalculateGroupMemberBalances(
       // Personal expenses don't affect totalOwed (skip the splitBetween loop below)
     } else {
       // Only calculate totalOwed for shared expenses (not personal)
-      splitBetween.forEach((userId) => {
-        if (!totals.has(userId)) {
-          totals.set(userId, {
-            userName: directoryMap.get(userId) ?? 'Member',
-            totalPaid: 0,
-            totalOwed: 0,
-            personalExpenses: 0,
-          });
-        }
+    splitBetween.forEach((userId) => {
+      if (!totals.has(userId)) {
+        totals.set(userId, {
+          userName: directoryMap.get(userId) ?? 'Member',
+          totalPaid: 0,
+          totalOwed: 0,
+          personalExpenses: 0,
+        });
+      }
 
-        const memberTotals = totals.get(userId);
-        if (memberTotals) {
-          memberTotals.totalOwed += share;
-        }
-      });
+      const memberTotals = totals.get(userId);
+      if (memberTotals) {
+        memberTotals.totalOwed += share;
+      }
+    });
     }
   });
 
@@ -408,6 +408,7 @@ export function subscribeToGroupBudget(
   callback: (budget: GroupBudgetRecord | null) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -416,7 +417,7 @@ export function subscribeToGroupBudget(
     callback(initialBudget);
 
     channel = supabase
-      .channel(`group-budgets-${groupId}`)
+      .channel(`group-budgets-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -431,6 +432,16 @@ export function subscribeToGroupBudget(
         }
       )
       .subscribe();
+
+    // Polling fallback every 3 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await getGroupBudget(groupId);
+        callback(updated);
+      } catch (err) {
+        console.error('Budget polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -441,6 +452,7 @@ export function subscribeToGroupBudget(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -449,6 +461,7 @@ export function subscribeToGroupExpenses(
   callback: (expenses: GroupExpenseRecord[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -457,7 +470,7 @@ export function subscribeToGroupExpenses(
     callback(initialExpenses);
 
     channel = supabase
-      .channel(`group-expenses-${groupId}`)
+      .channel(`group-expenses-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -472,6 +485,16 @@ export function subscribeToGroupExpenses(
         }
       )
       .subscribe();
+
+    // Polling fallback every 3 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await getGroupExpenses(groupId);
+        callback(updated);
+      } catch (err) {
+        console.error('Expenses polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -482,6 +505,7 @@ export function subscribeToGroupExpenses(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -490,6 +514,7 @@ export function subscribeToGroupMembers(
   callback: (members: GroupMemberSummary[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setupSubscription = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -498,7 +523,7 @@ export function subscribeToGroupMembers(
     callback(initialMembers);
 
     channel = supabase
-      .channel(`group-members-${groupId}`)
+      .channel(`group-members-${groupId}-${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -513,6 +538,16 @@ export function subscribeToGroupMembers(
         }
       )
       .subscribe();
+
+    // Polling fallback every 3 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await getGroupMembersSummary(groupId);
+        callback(updated);
+      } catch (err) {
+        console.error('Members polling error:', err);
+      }
+    }, 3000);
   };
 
   setupSubscription();
@@ -523,6 +558,7 @@ export function subscribeToGroupMembers(
         supabase.removeChannel(channel as RealtimeChannel);
       });
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

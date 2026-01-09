@@ -132,6 +132,7 @@ export function subscribeMemberLocations(
   callback: (locations: MemberLocation[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setup = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -139,7 +140,7 @@ export function subscribeMemberLocations(
     callback(initial);
 
     channel = supabase
-      .channel(`member-locations-${groupId}`)
+      .channel(`member-locations-${groupId}-${Date.now()}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -150,6 +151,16 @@ export function subscribeMemberLocations(
         callback(latest);
       })
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const latest = await listMemberLocations(groupId);
+        callback(latest);
+      } catch (err) {
+        console.error('Member locations polling error:', err);
+      }
+    }, 5000);
   };
 
   setup();
@@ -158,6 +169,7 @@ export function subscribeMemberLocations(
     if (channel) {
       getAuthenticatedSupabaseClient().then((s) => s.removeChannel(channel as RealtimeChannel));
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -214,6 +226,7 @@ export function subscribeMeetups(
   callback: (meetups: MeetupPoint[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setup = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -221,7 +234,7 @@ export function subscribeMeetups(
     callback(initial);
 
     channel = supabase
-      .channel(`meetups-${groupId}`)
+      .channel(`meetups-${groupId}-${Date.now()}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -232,6 +245,16 @@ export function subscribeMeetups(
         callback(latest);
       })
       .subscribe();
+
+    // Polling fallback every 5 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const latest = await listMeetups(groupId);
+        callback(latest);
+      } catch (err) {
+        console.error('Meetups polling error:', err);
+      }
+    }, 5000);
   };
 
   setup();
@@ -240,6 +263,7 @@ export function subscribeMeetups(
     if (channel) {
       getAuthenticatedSupabaseClient().then((s) => s.removeChannel(channel as RealtimeChannel));
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 
@@ -296,6 +320,7 @@ export function subscribeAlerts(
   callback: (alerts: EmergencyAlert[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
+  let pollInterval: NodeJS.Timeout | null = null;
 
   const setup = async () => {
     const supabase = await getAuthenticatedSupabaseClient();
@@ -303,7 +328,7 @@ export function subscribeAlerts(
     callback(initial);
 
     channel = supabase
-      .channel(`alerts-${groupId}`)
+      .channel(`alerts-${groupId}-${Date.now()}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -314,6 +339,16 @@ export function subscribeAlerts(
         callback(latest);
       })
       .subscribe();
+
+    // Polling fallback every 3 seconds (faster for emergencies)
+    pollInterval = setInterval(async () => {
+      try {
+        const latest = await listActiveAlerts(groupId);
+        callback(latest);
+      } catch (err) {
+        console.error('Alerts polling error:', err);
+      }
+    }, 3000);
   };
 
   setup();
@@ -322,6 +357,7 @@ export function subscribeAlerts(
     if (channel) {
       getAuthenticatedSupabaseClient().then((s) => s.removeChannel(channel as RealtimeChannel));
     }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }
 

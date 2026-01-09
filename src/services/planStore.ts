@@ -2,9 +2,21 @@ import { AiTripPlanData } from './api';
 
 type Listener = () => void;
 
+interface GenerationState {
+  isGenerating: boolean;
+  startTime: number;
+  destination: string;
+  error?: string;
+}
+
 class PlanStore {
   private currentPlan: AiTripPlanData | null = null;
   private listeners: Listener[] = [];
+  private generationState: GenerationState = {
+    isGenerating: false,
+    startTime: 0,
+    destination: '',
+  };
 
   getPlan(): AiTripPlanData | null {
     if (this.currentPlan) return this.currentPlan;
@@ -18,6 +30,54 @@ class PlanStore {
   setPlan(plan: AiTripPlanData) {
     this.currentPlan = plan;
     localStorage.setItem('current_ai_plan', JSON.stringify(plan));
+    // Clear generation state when plan is set
+    this.setGenerating(false, '');
+    this.emit();
+  }
+
+  // Generation state management
+  getGenerationState(): GenerationState {
+    // First check memory
+    if (this.generationState.isGenerating) {
+      return this.generationState;
+    }
+    // Then check localStorage
+    const cached = localStorage.getItem('plan_generation_state');
+    if (cached) {
+      try {
+        const state = JSON.parse(cached);
+        // Check if generation is stale (more than 5 minutes old)
+        if (state.isGenerating && Date.now() - state.startTime > 5 * 60 * 1000) {
+          // Clear stale generation state
+          this.setGenerating(false, '');
+          return { isGenerating: false, startTime: 0, destination: '' };
+        }
+        this.generationState = state;
+        return state;
+      } catch {}
+    }
+    return { isGenerating: false, startTime: 0, destination: '' };
+  }
+
+  setGenerating(isGenerating: boolean, destination: string, error?: string) {
+    this.generationState = {
+      isGenerating,
+      startTime: isGenerating ? Date.now() : 0,
+      destination,
+      error,
+    };
+    if (isGenerating) {
+      localStorage.setItem('plan_generation_state', JSON.stringify(this.generationState));
+    } else {
+      localStorage.removeItem('plan_generation_state');
+    }
+    this.emit();
+  }
+
+  setGenerationError(error: string) {
+    this.generationState.error = error;
+    this.generationState.isGenerating = false;
+    localStorage.removeItem('plan_generation_state');
     this.emit();
   }
 
